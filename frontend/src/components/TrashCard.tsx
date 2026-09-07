@@ -1,0 +1,85 @@
+import { useRef, useState } from 'react'
+import { useDraggable } from '../core/useDraggable'
+import { GlassPane } from './GlassPane'
+import { TrashCanIcon } from './TrashCanIcon'
+import { TrashContentsCard } from './TrashContentsCard'
+import type { ModulePosition } from '../core/types'
+
+const SIZE = { width: 72, height: 72 }
+const CLICK_MOVE_THRESHOLD = 6
+
+async function moveToTrash(filename: string) {
+  await fetch(`http://localhost:8001/songs/${filename}`, { method: 'DELETE' })
+}
+
+export function TrashCard({
+  startPosition,
+  onDragEnd,
+  onItemMoved,
+}: {
+  startPosition: ModulePosition
+  onDragEnd?: (bounds: DOMRect | undefined) => void
+  onItemMoved?: () => void
+}) {
+  const { position, dragHandlers } = useDraggable(startPosition, onDragEnd)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [isDropTarget, setIsDropTarget] = useState(false)
+  const [isContentsOpen, setIsContentsOpen] = useState(false)
+  const downPos = useRef<{ x: number; y: number } | null>(null)
+
+  const handlePointerDown = (e: React.PointerEvent) => {
+    downPos.current = { x: e.clientX, y: e.clientY }
+    dragHandlers.onPointerDown(e)
+  }
+
+  const handlePointerUp = (e: React.PointerEvent) => {
+    dragHandlers.onPointerUp(e, containerRef.current?.getBoundingClientRect())
+    if (!downPos.current) return
+    const dx = Math.abs(e.clientX - downPos.current.x)
+    const dy = Math.abs(e.clientY - downPos.current.y)
+    if (dx < CLICK_MOVE_THRESHOLD && dy < CLICK_MOVE_THRESHOLD) {
+      setIsContentsOpen(true)
+    }
+    downPos.current = null
+  }
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDropTarget(false)
+    const filename = e.dataTransfer.getData('text/raw-list-filename')
+    if (filename) {
+      await moveToTrash(filename)
+      onItemMoved?.()
+    }
+  }
+
+  if (isContentsOpen) {
+    return (
+      <TrashContentsCard
+        startPosition={position}
+        onClose={() => setIsContentsOpen(false)}
+        onRestore={onItemMoved}
+      />
+    )
+  }
+
+  return (
+    <div
+      ref={containerRef}
+      className="absolute"
+      style={{ left: position.x, top: position.y, width: SIZE.width, height: SIZE.height }}
+      onPointerDown={handlePointerDown}
+      onPointerMove={dragHandlers.onPointerMove}
+      onPointerUp={handlePointerUp}
+      onDragOver={(e) => { e.preventDefault(); setIsDropTarget(true) }}
+      onDragLeave={() => setIsDropTarget(false)}
+      onDrop={handleDrop}
+    >
+      <GlassPane className={`w-full h-full rounded-2xl cursor-grab active:cursor-grabbing ${isDropTarget ? 'ring-2 ring-white/80' : ''}`}>
+        <div className="flex-1 flex items-center justify-center">
+          <TrashCanIcon size={28} />
+        </div>
+      </GlassPane>
+    </div>
+  )
+}
