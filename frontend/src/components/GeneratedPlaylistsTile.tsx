@@ -481,6 +481,7 @@ export function GeneratedPlaylistsTile({
                   onArchived={async () => {
                     const updated = await fetchGenerationDetail(detail.id)
                     setDetail(updated)
+                    onGenerationsChanged()
                   }}
                   trashRef={trashRef}
                   archiveRef={archiveRef}
