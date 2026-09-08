@@ -35,5 +35,5 @@ export function useResizable(initial: ModuleSize, minSize: ModuleSize = { width:
     resizeState.current = null
   }, [])
 
-  return { size, resizeHandlers: { onPointerDown: onResizePointerDown, onPointerMove: onResizePointerMove, onPointerUp: onResizePointerUp } }
+    return { size, setSize, resizeHandlers: { onPointerDown: onResizePointerDown, onPointerMove: onResizePointerMove, onPointerUp: onResizePointerUp } }
 }

@@ -16,13 +16,20 @@ export function TrashCard({
   startPosition,
   onDragEnd,
   onItemMoved,
+  onGenerationRestored,
+  refreshKey,
+  containerRef,
 }: {
   startPosition: ModulePosition
   onDragEnd?: (bounds: DOMRect | undefined) => void
   onItemMoved?: () => void
+  onGenerationRestored?: () => void
+  refreshKey?: number
+  containerRef?: React.RefObject<HTMLDivElement | null>
 }) {
   const { position, dragHandlers } = useDraggable(startPosition, onDragEnd)
-  const containerRef = useRef<HTMLDivElement>(null)
+  const localRef = useRef<HTMLDivElement>(null)
+  const actualRef = containerRef ?? localRef
   const [isDropTarget, setIsDropTarget] = useState(false)
   const [isContentsOpen, setIsContentsOpen] = useState(false)
   const downPos = useRef<{ x: number; y: number } | null>(null)
@@ -33,7 +40,7 @@ export function TrashCard({
   }
 
   const handlePointerUp = (e: React.PointerEvent) => {
-    dragHandlers.onPointerUp(e, containerRef.current?.getBoundingClientRect())
+    dragHandlers.onPointerUp(e, actualRef.current?.getBoundingClientRect())
     if (!downPos.current) return
     const dx = Math.abs(e.clientX - downPos.current.x)
     const dy = Math.abs(e.clientY - downPos.current.y)
@@ -46,9 +53,9 @@ export function TrashCard({
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault()
     setIsDropTarget(false)
-    const filename = e.dataTransfer.getData('text/raw-list-filename')
-    if (filename) {
-      await moveToTrash(filename)
+    const rawListFilename = e.dataTransfer.getData('text/raw-list-filename')
+    if (rawListFilename) {
+      await moveToTrash(rawListFilename)
       onItemMoved?.()
     }
   }
@@ -59,13 +66,16 @@ export function TrashCard({
         startPosition={position}
         onClose={() => setIsContentsOpen(false)}
         onRestore={onItemMoved}
+        onGenerationRestore={onGenerationRestored}
+        refreshKey={refreshKey}
+        containerRef={actualRef}
       />
     )
   }
 
   return (
     <div
-      ref={containerRef}
+      ref={actualRef}
       className="absolute"
       style={{ left: position.x, top: position.y, width: SIZE.width, height: SIZE.height }}
       onPointerDown={handlePointerDown}
@@ -75,7 +85,14 @@ export function TrashCard({
       onDragLeave={() => setIsDropTarget(false)}
       onDrop={handleDrop}
     >
-      <GlassPane className={`w-full h-full rounded-2xl cursor-grab active:cursor-grabbing ${isDropTarget ? 'ring-2 ring-white/80' : ''}`}>
+      <GlassPane
+        className={`w-full h-full rounded-2xl cursor-grab active:cursor-grabbing 
+      transition-all duration-150 ${
+          isDropTarget
+            ? 'scale-110 ring-2 ring-white/80 shadow-[0_0_24px_rgba(255,255,255,0.65)]'
+            : 'scale-100'
+        }`}
+      >
         <div className="flex-1 flex items-center justify-center">
           <TrashCanIcon size={28} />
         </div>

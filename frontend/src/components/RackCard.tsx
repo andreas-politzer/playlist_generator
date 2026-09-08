@@ -9,6 +9,7 @@ const MODULE_LABELS: Record<ModuleId, string> = {
   trash: 'Trash',
   generate: 'Generate',
   generatedPlaylists: 'Generated Playlists',
+  archive: 'Archive',
 }
 
 const GAP = 12
@@ -47,6 +48,7 @@ export function RackCard({
       containerRef={rackRef}
       initialPosition={{ x: 180, y: 580 }}
       initialSize={minSize}
+      minSize={minSize}
       title="Rack"
       className="rounded-3xl"
       collapsible

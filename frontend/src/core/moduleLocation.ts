@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react'
 import type { ModulePosition } from './types'
 
-export type ModuleId = 'upload' | 'rawLists' | 'trash' | 'generate' | 'generatedPlaylists'
+export type ModuleId = 'upload' | 'rawLists' | 'trash' | 'generate' | 'generatedPlaylists' | 'archive'
 export type Location = { place: 'canvas'; position: ModulePosition } | { place: 'rack' }
 
 const INITIAL_POSITIONS: Record<ModuleId, ModulePosition> = {
@@ -10,6 +10,7 @@ const INITIAL_POSITIONS: Record<ModuleId, ModulePosition> = {
   trash: { x: 820, y: 100 },
   generate: { x: 460, y: 480 },
   generatedPlaylists: { x: 820, y: 300 },
+  archive: { x: 1180, y: 300 },
 }
 
 const INITIAL_LOCATIONS: Record<ModuleId, Location> = {
@@ -18,6 +19,7 @@ const INITIAL_LOCATIONS: Record<ModuleId, Location> = {
   trash: { place: 'rack' },
   generate: { place: 'rack' },
   generatedPlaylists: { place: 'rack' },
+  archive: { place: 'rack' },
 }
 
 export function useModuleLocations() {

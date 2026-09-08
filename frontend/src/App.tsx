@@ -1,25 +1,49 @@
-import { useRef, useState } from 'react'
+import { useRef, useState, useCallback, useEffect } from 'react'
 import { UploadTile } from './components/UploadTile'
 import { RawListsTile } from './components/RawListsTile'
 import { TrashCard } from './components/TrashCard'
 import { GenerateTile } from './components/GenerateTile'
 import { GeneratedPlaylistsTile } from './components/GeneratedPlaylistsTile'
+import { ArchiveTile } from './components/ArchiveTile'
 import { RackCard } from './components/RackCard'
 import { GlassFilterDefs } from './components/GlassFilterDefs'
+import { DebugPanel, debugLog } from './components/DebugPanel'
 import { useModuleLocations } from './core/moduleLocation'
 import tapeBackground from './assets/backgrounds/Tape2.jpg'
 
 function App() {
+  const appRenderCount = useRef(0)
+  appRenderCount.current += 1
+
   const { locations, moveToRack, moveToCanvas } = useModuleLocations()
   const rackRef = useRef<HTMLDivElement>(null)
+  const trashRef = useRef<HTMLDivElement>(null)
+  const archiveRef = useRef<HTMLDivElement>(null)
   const [rawListsRefreshKey, setRawListsRefreshKey] = useState(0)
-  const [generationsRefreshKey, setGenerationsRefreshKey] = useState(0)
+  const [trashRefreshKey, setTrashRefreshKey] = useState(0)
+  const [generations, setGenerations] = useState<any[]>([])
+
+  const loadGenerations = useCallback(async () => {
+    const response = await fetch('http://localhost:8001/generations', { cache: 'no-store' })
+    if (!response.ok) return
+    const data = await response.json()
+    setGenerations(data)
+    setTrashRefreshKey((k) => k + 1)
+    debugLog(`loadGenerations: ${data.length} items, ids: ${data.map((g: any) => 
+    g.id.slice(0,8)).join(',')}`)
+  }, [])
+
+  useEffect(() => {
+    loadGenerations()
+  }, [loadGenerations])
+  const [archiveRefreshKey, setArchiveRefreshKey] = useState(0)
 
   const uploadLocation = locations.upload
   const rawListsLocation = locations.rawLists
   const trashLocation = locations.trash
   const generateLocation = locations.generate
   const generatedLocation = locations.generatedPlaylists
+  const archiveLocation = locations.archive
 
   const checkRackOverlap = (bounds: DOMRect | undefined) => {
     const rackBounds = rackRef.current?.getBoundingClientRect()
@@ -42,7 +66,12 @@ function App() {
         backgroundPosition: 'center',
       }}
     >
+      <div className="fixed left-2 top-2 z-[99999] bg-red-600 px-2 py-1 text-xs text-white">
+      APP RENDER: {appRenderCount.current} · GENERATIONS: {generations.length}
+      </div>
+
       <GlassFilterDefs />
+      <DebugPanel />
 
       {uploadLocation.place === 'canvas' && (
         <UploadTile
@@ -71,6 +100,9 @@ function App() {
             if (checkRackOverlap(bounds)) moveToRack('trash')
           }}
           onItemMoved={() => setRawListsRefreshKey((k) => k + 1)}
+          onGenerationRestored={loadGenerations}
+          refreshKey={trashRefreshKey}
+          containerRef={trashRef}
         />
       )}
 
@@ -80,17 +112,33 @@ function App() {
           onDragEnd={(bounds) => {
             if (checkRackOverlap(bounds)) moveToRack('generate')
           }}
-          onGenerated={() => setGenerationsRefreshKey((k) => k + 1)}
+          onGenerated={loadGenerations}
         />
       )}
 
       {generatedLocation.place === 'canvas' && (
         <GeneratedPlaylistsTile
+          key={generations.map((g) => g.id).join('|')}
           startPosition={generatedLocation.position}
           onDragEnd={(bounds) => {
             if (checkRackOverlap(bounds)) moveToRack('generatedPlaylists')
           }}
-          refreshKey={generationsRefreshKey}
+          generations={generations}
+          onGenerationsChanged={loadGenerations}
+          trashRef={trashRef}
+          archiveRef={archiveRef}
+        />
+      )}
+
+      {archiveLocation.place === 'canvas' && (
+        <ArchiveTile
+          startPosition={archiveLocation.position}
+          onDragEnd={(bounds) => {
+            if (checkRackOverlap(bounds)) moveToRack('archive')
+          }}
+          refreshKey={archiveRefreshKey}
+          onItemUnarchived={loadGenerations} 
+          containerRef={archiveRef}
         />
       )}
 

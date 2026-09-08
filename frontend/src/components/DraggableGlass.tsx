@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useRef, useState, useLayoutEffect } from 'react'
 import type { ReactNode } from 'react'
 import { useDraggable } from '../core/useDraggable'
 import { useResizable, type ModuleSize } from '../core/useResizable'
@@ -11,6 +11,8 @@ const COLLAPSED_HEIGHT = 68
 export function DraggableGlass({
   initialPosition,
   initialSize,
+  minSize,
+  forceMinHeight,
   title,
   className,
   children,
@@ -22,6 +24,8 @@ export function DraggableGlass({
 }: {
   initialPosition: ModulePosition
   initialSize: ModuleSize
+  minSize?: ModuleSize
+  forceMinHeight?: number
   title: string
   className: string
   children: ReactNode
@@ -32,7 +36,18 @@ export function DraggableGlass({
   containerRef?: React.RefObject<HTMLDivElement | null>
 }) {
   const { position, dragHandlers } = useDraggable(initialPosition, onDragEnd)
-  const { size, resizeHandlers } = useResizable(initialSize)
+  const { size, resizeHandlers, setSize } = useResizable(initialSize, minSize)
+
+  useLayoutEffect(() => {
+    if (forceMinHeight === undefined) return
+
+    setSize((previous) => {
+      const nextHeight = Math.max(previous.height, forceMinHeight)
+      if (nextHeight === previous.height) return previous
+      return { ...previous, height: nextHeight }
+    })
+  }, [forceMinHeight, setSize])
+
   const [isOpen, setIsOpen] = useState(defaultOpen)
   const downPos = useRef<{ x: number; y: number } | null>(null)
 
