@@ -11,9 +11,9 @@ frontend/dist/
 frontend/build/
 frontend/.env
 
-# Daten
-data/*.csv
-!data/.gitkeep
+# Runtime data
+/data/*
+!/data/.gitkeep
 
 # OS
 .DS_Store
