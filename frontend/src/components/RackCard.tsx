@@ -8,8 +8,9 @@ const MODULE_LABELS: Record<ModuleId, string> = {
   rawLists: 'Raw Lists',
   trash: 'Trash',
   generate: 'Generate',
-  generatedPlaylists: 'Generated Playlists',
+    generatedPlaylists: 'Music Library',
   archive: 'Archive',
+  visualizations: 'Charts',
 }
 
 const GAP = 12

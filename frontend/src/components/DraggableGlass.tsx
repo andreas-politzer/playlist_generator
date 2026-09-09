@@ -18,9 +18,12 @@ export function DraggableGlass({
   children,
   collapsible = false,
   defaultOpen = true,
+  onDragStart,
   onDragEnd,
   onClose,
   containerRef,
+  zIndex,
+  dark = false,
 }: {
   initialPosition: ModulePosition
   initialSize: ModuleSize
@@ -31,9 +34,12 @@ export function DraggableGlass({
   children: ReactNode
   collapsible?: boolean
   defaultOpen?: boolean
+  onDragStart?: () => void
   onDragEnd?: (ownBounds: DOMRect | undefined) => void
   onClose?: () => void
   containerRef?: React.RefObject<HTMLDivElement | null>
+  zIndex?: number
+  dark?: boolean
 }) {
   const { position, dragHandlers } = useDraggable(initialPosition, onDragEnd)
   const { size, resizeHandlers, setSize } = useResizable(initialSize, minSize)
@@ -53,6 +59,7 @@ export function DraggableGlass({
 
   const headerPointerDown = (e: React.PointerEvent) => {
     downPos.current = { x: e.clientX, y: e.clientY }
+    onDragStart?.()
     dragHandlers.onPointerDown(e)
   }
 
@@ -73,14 +80,16 @@ export function DraggableGlass({
     <div
       ref={containerRef}
       className="absolute transition-[height] duration-500 ease-[cubic-bezier(0.4,0,0.2,1)]"
-      style={{ left: position.x, top: position.y, width: size.width, height: outerHeight }}
+      style={{ left: position.x, top: position.y, width: size.width, height: outerHeight, zIndex }}
     >
       <GlassPane className={`w-full h-full ${className}`}>
-        {onClose && (
+          {onClose && (
           <button
             onPointerDown={(e) => e.stopPropagation()}
             onClick={onClose}
-            className="absolute top-3 right-3 z-10 w-5 h-5 flex items-center justify-center text-white/50 hover:text-white/90 text-xs"
+            className={`absolute top-3 right-3 z-10 w-5 h-5 flex items-center justify-center text-xs ${
+              dark ? 'text-black/50 hover:text-black/90' : 'text-white/50 hover:text-white/90'
+            }`}
           >
             ✕
           </button>
@@ -91,7 +100,7 @@ export function DraggableGlass({
           onPointerMove={dragHandlers.onPointerMove}
           onPointerUp={headerPointerUp}
         >
-          <span className="font-body text-xs tracking-widest text-white uppercase">{title}</span>
+          <span className={`font-body text-xs tracking-widest uppercase ${dark ? 'text-black' : 'text-white'}`}>{title}</span>
         </div>
         <div
           className="flex-1 flex flex-col overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.4,0,0.2,1)]"

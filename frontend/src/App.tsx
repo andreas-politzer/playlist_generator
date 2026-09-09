@@ -5,20 +5,43 @@ import { TrashCard } from './components/TrashCard'
 import { GenerateTile } from './components/GenerateTile'
 import { GeneratedPlaylistsTile } from './components/GeneratedPlaylistsTile'
 import { ArchiveTile } from './components/ArchiveTile'
+import { VisualizationsTile } from './components/VisualizationsTile'
+import { ChartTile } from './components/ChartTile'
+import { useVisualizationTiles } from './core/visualizationTiles'
 import { RackCard } from './components/RackCard'
 import { GlassFilterDefs } from './components/GlassFilterDefs'
-import { DebugPanel, debugLog } from './components/DebugPanel'
 import { useModuleLocations } from './core/moduleLocation'
+import type { AnchoredPlaylist, AnchoredGeneration } from './core/types'
 import tapeBackground from './assets/backgrounds/Tape2.jpg'
 
 function App() {
-  const appRenderCount = useRef(0)
-  appRenderCount.current += 1
-
   const { locations, moveToRack, moveToCanvas } = useModuleLocations()
   const rackRef = useRef<HTMLDivElement>(null)
   const trashRef = useRef<HTMLDivElement>(null)
   const archiveRef = useRef<HTMLDivElement>(null)
+  const chartsPlaylistAnchorRef = useRef<HTMLDivElement>(null)
+  const chartsGenerationAnchorRef = useRef<HTMLDivElement>(null)
+  const [anchoredPlaylist, setAnchoredPlaylist] = useState<AnchoredPlaylist | null>(null)
+  const [anchoredGeneration, setAnchoredGeneration] = useState<AnchoredGeneration | null>(null)
+  const { tiles: chartTiles, addTile: addChartTile, removeTile: removeChartTile, bringTileToFront: bringChartTileToFront } = useVisualizationTiles()
+
+  const handleGeneratePlaylistChart = (chartType: 'radar' | 'tsne' | 'dendrogram') => {
+    if (!anchoredPlaylist) return
+    addChartTile(
+      { x: 400, y: 200 },
+      chartType,
+      { type: 'playlist', generationId: anchoredPlaylist.generationId, playlistId: anchoredPlaylist.playlistId },
+    )
+  }
+
+  const handleGenerateGenerationChart = (chartType: 'radar' | 'tsne' | 'dendrogram') => {
+    if (!anchoredGeneration) return
+    addChartTile(
+      { x: 400, y: 200 },
+      chartType,
+      { type: 'generation', generationId: anchoredGeneration.generationId },
+    )
+  }
   const [rawListsRefreshKey, setRawListsRefreshKey] = useState(0)
   const [trashRefreshKey, setTrashRefreshKey] = useState(0)
   const [generations, setGenerations] = useState<any[]>([])
@@ -29,8 +52,6 @@ function App() {
     const data = await response.json()
     setGenerations(data)
     setTrashRefreshKey((k) => k + 1)
-    debugLog(`loadGenerations: ${data.length} items, ids: ${data.map((g: any) => 
-    g.id.slice(0,8)).join(',')}`)
   }, [])
 
   useEffect(() => {
@@ -44,6 +65,7 @@ function App() {
   const generateLocation = locations.generate
   const generatedLocation = locations.generatedPlaylists
   const archiveLocation = locations.archive
+  const visualizationsLocation = locations.visualizations
 
   const checkRackOverlap = (bounds: DOMRect | undefined) => {
     const rackBounds = rackRef.current?.getBoundingClientRect()
@@ -66,12 +88,21 @@ function App() {
         backgroundPosition: 'center',
       }}
     >
-      <div className="fixed left-2 top-2 z-[99999] bg-red-600 px-2 py-1 text-xs text-white">
-      APP RENDER: {appRenderCount.current} · GENERATIONS: {generations.length}
-      </div>
-
       <GlassFilterDefs />
-      <DebugPanel />
+
+      <button
+        onClick={() => {
+          const el = document.documentElement
+          if (!document.fullscreenElement) {
+            el.requestFullscreen()
+          } else {
+            document.exitFullscreen()
+          }
+        }}
+        className="fixed top-2 right-2 z-[9999] bg-black/40 hover:bg-black/60 text-white text-xs px-3 py-1.5 rounded-lg backdrop-blur-sm"
+      >
+        ⛶ 
+      </button>
 
       {uploadLocation.place === 'canvas' && (
         <UploadTile
@@ -118,18 +149,22 @@ function App() {
 
       {generatedLocation.place === 'canvas' && (
         <GeneratedPlaylistsTile
-          key={generations.map((g) => g.id).join('|')}
           startPosition={generatedLocation.position}
           onDragEnd={(bounds) => {
             if (checkRackOverlap(bounds)) moveToRack('generatedPlaylists')
           }}
           generations={generations}
           onGenerationsChanged={loadGenerations}
+          onArchiveChanged={() => setArchiveRefreshKey((k) => k + 1)}
           trashRef={trashRef}
           archiveRef={archiveRef}
+          chartsPlaylistAnchorRef={chartsPlaylistAnchorRef}
+          chartsGenerationAnchorRef={chartsGenerationAnchorRef}
+          onAnchorPlaylist={setAnchoredPlaylist}
+          onAnchorGeneration={setAnchoredGeneration}
         />
       )}
-
+      
       {archiveLocation.place === 'canvas' && (
         <ArchiveTile
           startPosition={archiveLocation.position}
@@ -142,11 +177,39 @@ function App() {
         />
       )}
 
+      {visualizationsLocation.place === 'canvas' && (
+        <VisualizationsTile
+          startPosition={visualizationsLocation.position}
+          onDragEnd={(bounds) => {
+            if (checkRackOverlap(bounds)) moveToRack('visualizations')
+          }}
+          playlistAnchorRef={chartsPlaylistAnchorRef}
+          generationAnchorRef={chartsGenerationAnchorRef}
+          anchoredPlaylist={anchoredPlaylist}
+          anchoredGeneration={anchoredGeneration}
+          onClearPlaylist={() => setAnchoredPlaylist(null)}
+          onClearGeneration={() => setAnchoredGeneration(null)}
+          onGeneratePlaylistChart={handleGeneratePlaylistChart}
+          onGenerateGenerationChart={handleGenerateGenerationChart}
+        />
+      )}
+
       <RackCard
         locations={locations}
         onPullOut={(id, position) => moveToCanvas(id, position)}
         rackRef={rackRef}
       />
+
+      {chartTiles.map((tile) => (
+        <ChartTile
+          key={tile.id}
+          id={tile.id}
+          position={tile.position}
+          chartType={tile.chartType}
+          source={tile.source}
+          onClose={removeChartTile}
+        />
+      ))}
     </div>
   )
 }

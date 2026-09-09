@@ -124,6 +124,7 @@ export function ArchiveTile({
     await createFolder(name, currentFolderId)
     setNewFolderName('')
     load()
+    fetchFolders(null).then(setAllFolders)
   }
 
   const handleUnarchive = async (itemId: string) => {

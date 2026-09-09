@@ -1,326 +1,60 @@
 # Playlist Generator
 
-**Status: 🚧 Active prototype — core generation, trash handling, and algorithm configuration are working; production polish is still ongoing.**
+**Status: 🚧 Active prototype.** Core generation, tile-based UI, Trash, Archive, and a first Charts/Visualizations module are working. Production polish is ongoing.
 
 ## What is this?
 
-Playlist Generator creates playlists from a song library using audio features such as danceability, energy, tempo, acousticness, valence, and instrumentalness.
+Playlist Generator turns a song library into a set of playlists using unsupervised machine learning on audio features (danceability, energy, tempo, acousticness, valence, instrumentalness, and more). It grew out of the "Moosic" case study from the WBS Coding School Data Science bootcamp, which showed that audio-only clustering has real limits — e.g. calm Bossa Nova and classical pieces can end up in the same cluster despite being musically unrelated. This project exists to push past that limit.
 
-The application is designed around two future modes:
+## Current state (short version)
 
-1. **Bulk playlist generation**  
-   Upload a complete song library and split it into multiple playlists using clustering.
+- **Song library management**: upload, Trash, restore, drag-and-drop tile UI (Rack ↔ Canvas)
+- **Generation**: 4 clustering algorithms (K-Means, DBSCAN, Agglomerative, GMM), 4 scalers, automatic audio-feature detection, Silhouette scoring, persisted results
+- **Music Library**: browse generated Collections, drill into individual Playlists, rename Collections
+- **Archive**: folder structure for archiving Collections and Playlists, restore, move between folders
+- **Charts**: a dedicated visualization module — anchor a Playlist or Collection by drag-and-drop, generate a Radar chart (raw or scaled values, toggleable), compare multiple charts side by side as independent canvas tiles
+- **Fullscreen mode** for the canvas
 
-2. **Themed playlist creation** *(planned)*  
-   Describe a mood, theme, genre, artist, or decade and generate a matching playlist through similarity search and embeddings.
+Full drag-and-drop mechanics (Trash, Archive drop targets, tile resizing/collapsing) all work and are considered a solved problem — not detailed further here.
 
-The bulk-generation mode is currently implemented and functional.
+## The vision
 
-## Background
+The long-term goal is a tool that goes well beyond single-pass unsupervised clustering, combining several layers:
 
-The project grew out of the “Moosic” case study from the WBS Coding School Data Science bootcamp.
+### 1. Richer unsupervised clustering
+- **Multi-stage / ensemble clustering**: chain algorithms instead of running one in isolation — e.g. run DBSCAN first to strip outliers/noise from a large library, then run K-Means on the cleaned remainder to get tighter, more balanced clusters. Different algorithms are strong at different things; this lets the tool use each for what it does best.
+- **Dimensionality reduction (PCA)** for when the feature space grows large — especially once genre/mood embeddings are added and audio features alone are no longer the only input.
 
-The original case study used K-Means clustering on Spotify audio features. It showed that audio-only clustering has clear limitations: musically different genres can appear together when they share similar acoustic properties. For example, calm Bossa Nova and classical pieces may be grouped together even though their cultural and stylistic contexts are very different.
+### 2. Metadata enrichment & LLM assistance
+- Genre, mood, decade, and artist tagging
+- LLM-assisted enrichment of missing metadata after upload
+- Detection of gaps in the available feature set
 
-The Playlist Generator is intended to extend this approach with:
+### 3. Embeddings and semantic search
+- Combined audio-feature + metadata embeddings
+- Separate, tunable weighting for audio vs. genre/mood/era
+- Free-text prompts ("chill songs for a rainy Sunday") resolved via similarity search (FAISS, Chroma, or similar)
 
-- multiple clustering algorithms
-- additional metadata such as genre, mood, decade, and artist
-- LLM-assisted feature enrichment
-- embeddings and similarity search
-- capacity-aware playlist balancing
-- visual diagnostics and quality scores
+### 4. Themed playlist mode (planned, not yet started)
+Instead of only bulk-clustering a whole library, let a user describe what they want directly — mood, genre, artist, decade, target length, functional category (workout, party, driving) — each with a neutral "no preference" option.
 
-## Current functionality
+### 5. Playlist balancing & automatic optimization
+- Capacity-aware sizing (approximate or exact song counts, duration targets)
+- An eventual "optimize automatically" mode that compares algorithms, scalers, and parameters against a combined statistical + practical-usefulness objective, instead of requiring manual tuning
 
-### Song library management
+### 6. Visual diagnostics (in progress)
+Radar charts are live. Planned next: t-SNE/UMAP projections, dendrograms (for Agglomerative-based Collections), cluster size/duration comparisons, and algorithm/scaler comparison views — all as independent, comparable canvas tiles, not a single fixed view.
 
-- Upload CSV files by drag and drop or file picker
-- Detect duplicate uploads
-- Display uploaded raw lists in a dedicated tile
-- Move raw lists to the Trash
-- Restore raw lists
-- Permanently delete raw lists
-- Drag tiles between the canvas and the collapsible Rack
-- Resize and collapse tiles
-- Glassmorphism-based draggable interface
-
-### Automatic feature detection
-
-The backend automatically separates detected columns into categories:
-
-- **Audio features**  
-  Numeric features used for clustering, such as:
-  - danceability
-  - energy
-  - key
-  - loudness
-  - mode
-  - speechiness
-  - acousticness
-  - instrumentalness
-  - liveness
-  - valence
-  - tempo
-  - time signature
-
-- **Context features**  
-  Potentially useful metadata that is currently kept separate, such as:
-  - year
-  - release year
-  - decade
-  - duration
-  - popularity
-  - rank
-
-- **Technical columns**  
-  Identifiers and file-related columns that should not influence clustering, such as:
-  - IDs
-  - track IDs
-  - artist IDs
-  - album IDs
-  - filenames
-  - URLs
-  - Spotify URIs
-  - indexes
-
-The backend also reports ambiguous numeric columns. For example, `key`, `mode`, and `time_signature` are numeric but may be categorical rather than continuous.
-
-### Playlist generation
-
-The Generate tile supports:
-
-- approximate songs-per-playlist mode
-- exact number-of-playlists mode
-- algorithm selection
-- scaler selection
-- algorithm-specific parameters
-- quality reporting through the Silhouette Coefficient
-- persisted generation results
-- drill-down from a generation to its individual playlists and tracks
-
-### Supported clustering algorithms
-
-The current implementation supports four algorithms:
-
-#### K-Means
-
-- configurable number of clusters
-- suitable when a target number of playlists is known
-- currently the main baseline algorithm
-
-#### DBSCAN
-
-- configurable epsilon
-- configurable minimum samples
-- determines the number of clusters automatically
-- can classify songs as noise
-- useful for density-based structures, but sensitive to parameter choice
-
-#### Agglomerative Clustering
-
-- configurable number of clusters
-- hierarchical bottom-up clustering
-- supports different linkage strategies
-
-#### Gaussian Mixture Models
-
-- configurable number of components
-- probabilistic clustering model
-- assumes approximately Gaussian cluster structures
-- can produce highly unbalanced results on unsuitable datasets
-
-### Supported scalers
-
-The current implementation supports:
-
-- `StandardScaler`
-- `MinMaxScaler`
-- `RobustScaler`
-- `PowerTransformer`
-
-Different scalers can produce noticeably different clusters because they change the relative influence of features and outliers.
-
-### Quality evaluation
-
-The current generation result reports the Silhouette Coefficient.
-
-The score is used as a diagnostic indicator, not as an absolute pass/fail criterion:
-
-- higher values generally indicate better separation
-- values near zero indicate overlapping clusters
-- negative values indicate potentially poor assignments
-- DBSCAN noise points require special interpretation
-- a good score does not automatically mean a musically meaningful playlist
-
-Additional evaluation metrics and visual diagnostics are planned.
-
-### Generation library
-
-Generated results are persisted on the backend rather than existing only in browser memory.
-
-The Generated Playlists tile supports:
-
-- listing saved generations
-- opening a generation
-- viewing individual playlists
-- viewing tracks inside playlists
-- renaming generations
-- displaying generation information
-- moving complete generations to the Trash
-- moving individual playlists to the Trash
-- restoring generations
-- restoring individual playlists
-- permanently deleting generations
-- permanently deleting individual playlists
-
-### Trash
-
-The Trash supports three item types:
-
-- raw song lists
-- complete generations
-- individual playlists
-
-Supported operations include:
-
-- restore
-- permanent deletion
-- immediate UI refresh after restore
-- immediate UI refresh after moving items to Trash
-- compact and expanded Trash views
-- dropping items into both the compact and expanded Trash tile
-- visual feedback when dragging an item over the Trash
-
-### Archive
-
-An Archive tile and folder structure are present as an additional organization concept for generated results.
-
-The Archive is still under active development and requires further polish for:
-
-- consistent handling of root-level items
-- folder navigation
-- moving complete generations
-- moving individual playlists
-- archive context menus
-- reliable restore and reorganization workflows
-
-## Quality metrics
-
-The current system exposes the Silhouette Coefficient as a first diagnostic metric.
-
-Future evaluation will also consider:
-
-- Davies-Bouldin Index
-- Calinski-Harabasz Index
-- playlist size balance
-- duration balance
-- noise percentage for DBSCAN
-- genre and mood coherence
-- artist diversity
-- user-defined playlist constraints
-- human listening tests
-
-No single clustering metric can fully measure musical usefulness.
-
-## Planned features
-
-### Metadata enrichment
-
-- genre tagging
-- mood tagging
-- decade and release-year enrichment
-- artist and band metadata
-- detection of missing useful features
-- optional LLM-assisted enrichment after upload
-
-### Embeddings and similarity search
-
-- combined audio-feature and metadata embeddings
-- separate weighting for audio, genre, mood, and time period
-- free-text playlist prompts
-- similarity search using cosine similarity
-- vector storage using FAISS, Chroma, or a comparable solution
-
-### Themed playlist mode
-
-Users should eventually be able to select or describe:
-
-- mood
-- genre
-- artist
-- decade
-- playlist length
-- number of songs
-- functional categories such as workout, party, driving, or heartbreak
-
-Every category should support a neutral “no preference” option.
-
-### Playlist balancing
-
-Future versions should support:
-
-- approximate or exact playlist sizes
-- duration targets
-- capacity-aware reassignment
-- balancing oversized and undersized clusters
-- optional removal or isolation of extreme outliers
-
-### Automatic optimization
-
-A future “Optimize automatically” mode may compare:
-
-- algorithms
-- scalers
-- cluster counts
-- DBSCAN parameters
-- linkage strategies
-- GMM parameters
-- feature weights
-
-The best configuration should be selected using a combined objective that considers both statistical quality and practical playlist balance.
-
-### Visualizations
-
-Planned visual diagnostics include:
-
-- radar charts per playlist
-- cluster overview charts
-- t-SNE or UMAP projections
-- feature distributions
-- cluster size and duration comparisons
-- algorithm and scaler comparison views
-
-### Export and integrations
-
-- CSV export
-- M3U export
-- Spotify playlist export
-- possible Spotify API integration
-- external playlist import
-
-### Long-running jobs
-
-The current generation process is synchronous and suitable for small datasets.
-
-For larger libraries and LLM enrichment, the backend will eventually need:
-
-- background jobs
-- progress reporting
-- cancellation
-- job history
-- error recovery
-- rate-limit handling
+### 7. Export & integration
+CSV/M3U export, a large printable/editable playlist detail view, possibly direct Spotify integration.
 
 ## Tech stack
 
 - **Backend:** Python, FastAPI, pandas, scikit-learn
-- **Frontend:** React, TypeScript, Vite
+- **Frontend:** React, TypeScript, Vite, Recharts
 - **Styling:** Tailwind CSS
-- **Storage:** JSON files for generations and local SQLite storage for archive data
-- **UI:** draggable glassmorphism tiles, collapsible modules, Rack, Trash, and Archive
-- **Planned search layer:** FAISS, Chroma, or another vector database
-- **Planned AI layer:** LLM-assisted metadata enrichment and free-text interpretation
+- **Storage:** JSON files for generation results, SQLite for archive data
+- **Planned:** FAISS/Chroma for semantic search, LLM API integration for enrichment
 
 ## Project structure
 
@@ -335,13 +69,15 @@ playlist_generator/
 │       │   ├── UploadTile.tsx
 │       │   ├── RawListsTile.tsx
 │       │   ├── TrashCard.tsx
-│       │   ├── TrashContentsCard.tsx
 │       │   ├── GenerateTile.tsx
-│       │   ├── GeneratedPlaylistsTile.tsx
+│       │   ├── GeneratedPlaylistsTile.tsx   # displayed as "Music Library"
 │       │   ├── ArchiveTile.tsx
+│       │   ├── VisualizationsTile.tsx        # displayed as "Charts"
+│       │   ├── ChartTile.tsx                 # individual chart, dynamically spawned
 │       │   └── RackCard.tsx
 │       ├── core/
-│       │   ├── moduleLocation.ts
+│       │   ├── moduleLocation.ts             # fixed modules (rack/canvas placement)
+│       │   ├── visualizationTiles.ts         # dynamic, multi-instance chart tiles
 │       │   ├── useDraggable.ts
 │       │   └── types.ts
 │       └── assets/
@@ -353,7 +89,7 @@ playlist_generator/
 └── docs/
 ```
 
-Runtime data under `data/` is local application data and should not normally be committed to Git.
+Runtime data under `data/` is local application data and should not be committed to Git.
 
 ## Running locally
 
@@ -372,28 +108,16 @@ cd frontend
 npm run dev
 ```
 
-Open the URL printed by Vite. The default is usually:
+Open the URL Vite prints (usually `http://localhost:5173`).
 
-```text
-http://localhost:5173
-```
+## Known limitations
 
-If that port is already in use, Vite selects the next available port.
-
-## Current limitations
-
-- Themed playlist creation is not implemented yet
-- No genre, mood, decade, or artist enrichment pipeline
-- No LLM integration
-- No embeddings or vector database
-- No free-text playlist prompts
-- Playlist sizes are not yet capacity-balanced
-- Statistical quality does not necessarily equal musical quality
-- No automatic algorithm and scaler optimization
-- No radar charts or t-SNE/UMAP views
-- Archive workflows still need further polish
-- No CSV or M3U export
-- No Spotify API integration
-- Generation is currently synchronous
-- Runtime test data still needs better Git exclusion and cleanup
-- The current UI is a functional prototype rather than a production-ready application
+- No themed/prompt-based playlist mode yet
+- No metadata enrichment, LLM integration, embeddings, or vector search yet
+- No ensemble/multi-stage clustering yet
+- No automatic algorithm/parameter optimization yet
+- No PCA support yet
+- t-SNE, dendrograms, and other planned chart types not built yet
+- No CSV/M3U/Spotify export yet
+- Generation is synchronous (fine for small libraries; will need background jobs for large ones)
+- UI is a functional prototype, not production-polished

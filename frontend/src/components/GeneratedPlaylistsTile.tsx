@@ -113,6 +113,8 @@ function useDropOnTarget(
   previewSize: { width: number; height: number },
   trashRef: React.RefObject<HTMLDivElement | null>,
   archiveRef: React.RefObject<HTMLDivElement | null>,
+  chartsAnchorRef?: React.RefObject<HTMLDivElement | null>,
+  onDroppedOnChartsAnchor?: () => void,
 ) {
   const [isWobbling, setIsWobbling] = useState(false)
   const didDragRef = useRef(false)
@@ -136,6 +138,7 @@ function useDropOnTarget(
   const clearTargetFeedback = () => {
     setTargetFeedback(trashRef, false)
     setTargetFeedback(archiveRef, false)
+    if (chartsAnchorRef) setTargetFeedback(chartsAnchorRef, false)
   }
 
   const onGripPointerDown = (e: React.PointerEvent) => {
@@ -176,9 +179,10 @@ function useDropOnTarget(
 
     setTargetFeedback(trashRef, checkOverlap(bounds, trashRef))
     setTargetFeedback(archiveRef, checkOverlap(bounds, archiveRef))
+    if (chartsAnchorRef) setTargetFeedback(chartsAnchorRef, checkOverlap(bounds, chartsAnchorRef))
   }
 
-  const onGripPointerUp = () => {
+    const onGripPointerUp = () => {
     if (previewPos) {
       const bounds = {
         left: previewPos.x,
@@ -193,6 +197,9 @@ function useDropOnTarget(
       } else if (checkOverlap(bounds, archiveRef)) {
         debugLog('dropped on archive')
         onDroppedOnArchive()
+      } else if (chartsAnchorRef && checkOverlap(bounds, chartsAnchorRef)) {
+        debugLog('dropped on charts anchor')
+        onDroppedOnChartsAnchor?.()
       }
     }
 
@@ -220,24 +227,32 @@ function GenerationRow({
   onContextMenu,
   onDeleted,
   onArchived,
+  onArchiveChanged,
   trashRef,
   archiveRef,
+  chartsGenerationAnchorRef,
+  onAnchorGeneration,
 }: {
   gen: GenerationSummary
   onOpen: () => void
   onContextMenu: (e: React.MouseEvent) => void
   onDeleted: () => void
   onArchived: () => void
+  onArchiveChanged: () => void
   trashRef: React.RefObject<HTMLDivElement | null>
   archiveRef: React.RefObject<HTMLDivElement | null>
+  chartsGenerationAnchorRef: React.RefObject<HTMLDivElement | null>
+  onAnchorGeneration: (anchor: import('../core/types').AnchoredGeneration) => void
 }) {
   const previewSize = { width: 180, height: 40 }
   const { isWobbling, previewPos, didDragRef, gripHandlers } = useDropOnTarget(
     () => deleteGeneration(gen.id).then(onDeleted),
-    () => archiveGeneration(gen.id).then(onArchived),
+    () => archiveGeneration(gen.id).then(() => { onArchived(); onArchiveChanged() }),
     previewSize,
     trashRef,
     archiveRef,
+    chartsGenerationAnchorRef,
+    () => onAnchorGeneration({ type: 'generation', generationId: gen.id, label: gen.name }),
   )
 
   return (
@@ -246,7 +261,15 @@ function GenerationRow({
         onPointerDown={gripHandlers.onGripPointerDown}
         onPointerMove={gripHandlers.onGripPointerMove}
         onPointerUp={gripHandlers.onGripPointerUp}
-        onClick={onOpen}
+        onClick={(e) => {
+          if (didDragRef.current) {
+            didDragRef.current = false
+            e.preventDefault()
+            return
+          }
+
+          onOpen()
+        }}
         onContextMenu={onContextMenu}
         style={{ opacity: previewPos ? 0.3 : 1 }}
         className={`group relative w-full flex flex-col gap-0.5 bg-white/5 hover:bg-white/10 rounded-lg px-2 py-1.5 text-left cursor-grab active:cursor-grabbing select-none touch-none ${
@@ -283,24 +306,39 @@ function PlaylistRow({
   isExpanded,
   onToggleExpand,
   onArchived,
+  onArchiveChanged,
   trashRef,
   archiveRef,
+  chartsPlaylistAnchorRef,
+  onAnchorPlaylist,
 }: {
   cluster: Cluster
   generationId: string
   isExpanded: boolean
   onToggleExpand: () => void
   onArchived: () => void
+  onArchiveChanged: () => void
   trashRef: React.RefObject<HTMLDivElement | null>
   archiveRef: React.RefObject<HTMLDivElement | null>
+  chartsPlaylistAnchorRef: React.RefObject<HTMLDivElement | null>
+  onAnchorPlaylist: (anchor: import('../core/types').AnchoredPlaylist) => void
 }) {
+
   const previewSize = { width: 160, height: 36 }
   const { isWobbling, previewPos, didDragRef, gripHandlers } = useDropOnTarget(
     () => trashPlaylist(cluster.playlist_id, generationId).then(onArchived),
-    () => archivePlaylist(cluster.playlist_id, generationId).then(onArchived),
+    () => archivePlaylist(cluster.playlist_id, generationId).then(() => { onArchived(); onArchiveChanged() }),
     previewSize,
     trashRef,
     archiveRef,
+    chartsPlaylistAnchorRef,
+    () =>
+      onAnchorPlaylist({
+        type: 'playlist',
+        playlistId: cluster.playlist_id,
+        generationId,
+        label: `Playlist ${cluster.cluster_id + 1}`,
+      }),
   )
 
   return (
@@ -359,16 +397,27 @@ export function GeneratedPlaylistsTile({
   onDragEnd,
   generations,
   onGenerationsChanged,
+  onArchiveChanged,
   trashRef,
   archiveRef,
+  chartsPlaylistAnchorRef,
+  chartsGenerationAnchorRef,
+  onAnchorPlaylist,
+  onAnchorGeneration,
 }: {
   startPosition: ModulePosition
   onDragEnd?: (bounds: DOMRect | undefined) => void
   generations: GenerationSummary[]
   onGenerationsChanged: () => void
+  onArchiveChanged: () => void
   trashRef: React.RefObject<HTMLDivElement | null>
   archiveRef: React.RefObject<HTMLDivElement | null>
+  chartsPlaylistAnchorRef: React.RefObject<HTMLDivElement | null>
+  chartsGenerationAnchorRef: React.RefObject<HTMLDivElement | null>
+  onAnchorPlaylist: (anchor: import('../core/types').AnchoredPlaylist) => void
+  onAnchorGeneration: (anchor: import('../core/types').AnchoredGeneration) => void
 }) {
+
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [detail, setDetail] = useState<GenerationDetail | null>(null)
   const [expandedCluster, setExpandedCluster] = useState<number | null>(null)
@@ -429,7 +478,7 @@ export function GeneratedPlaylistsTile({
     <DraggableGlass
       initialPosition={startPosition}
       initialSize={{ width: 360, height: 420 }}
-      title="Generated Playlists"
+      title="Music Library"
       className="rounded-3xl"
       collapsible
       defaultOpen={true}
@@ -439,20 +488,26 @@ export function GeneratedPlaylistsTile({
       <div className="px-6 pb-6 flex-1 flex flex-col overflow-hidden">
         {!selectedId && (
           <div className="flex-1 overflow-y-auto space-y-2">
+            <span className="shrink-0 text-[10px] font-body text-white/50 uppercase tracking-widest">
+              Collections
+            </span>
             {debugLog(`render: generations.length=${generations.length}`) as any}
             {generations.length === 0 && (
-              <span className="text-xs font-body text-white/40">No generations yet</span>
+              <span className="text-xs font-body text-white/40">No collections yet</span>
             )}
             {generations.map((gen) => { debugLog(`mapping gen ${gen.id.slice(0,8)}`); return (
-              <GenerationRow
+                <GenerationRow
                 key={gen.id}
                 gen={gen}
                 onOpen={() => openDetail(gen.id)}
                 onContextMenu={(e) => openContextMenu(e, gen.id)}
                 onDeleted={() => handleGenerationDeleted(gen.id)}
                 onArchived={onGenerationsChanged}
+                onArchiveChanged={onArchiveChanged}
                 trashRef={trashRef}
                 archiveRef={archiveRef}
+                chartsGenerationAnchorRef={chartsGenerationAnchorRef}
+                onAnchorGeneration={onAnchorGeneration}
               />
             )})}
           </div>
@@ -465,12 +520,12 @@ export function GeneratedPlaylistsTile({
               onClick={backToList}
               className="shrink-0 text-left text-[10px] font-body uppercase tracking-widest text-white/50 hover:text-white/90 mb-2"
             >
-              ← Back
+              ← Playlists in "{detail.name}"
             </button>
 
             <div className="flex-1 overflow-y-auto space-y-2">
               {detail.clusters.map((cluster) => (
-                <PlaylistRow
+                  <PlaylistRow
                   key={cluster.playlist_id}
                   cluster={cluster}
                   generationId={detail.id}
@@ -483,8 +538,11 @@ export function GeneratedPlaylistsTile({
                     setDetail(updated)
                     onGenerationsChanged()
                   }}
+                  onArchiveChanged={onArchiveChanged}
                   trashRef={trashRef}
                   archiveRef={archiveRef}
+                  chartsPlaylistAnchorRef={chartsPlaylistAnchorRef}
+                  onAnchorPlaylist={onAnchorPlaylist}
                 />
               ))}
             </div>

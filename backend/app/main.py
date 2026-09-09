@@ -306,12 +306,26 @@ async def generate_playlists(filename: str, request: GenerateRequest):
                 "duration_ms": int(row["duration_ms"]) if "duration_ms" in df.columns else None,
             })
 
+        audio_feature_averages = {}
+        for col in feature_info["audio_features"]:
+            avg = cluster_songs[col].mean(skipna=True)
+            audio_feature_averages[col] = round(float(avg), 4) if pd.notna(avg) else None
+
+        X_scaled_cluster = X_scaled[mask]
+        audio_feature_averages_scaled = {}
+        for i, col in enumerate(feature_info["audio_features"]):
+            col_values = X_scaled_cluster[:, i]
+            valid_values = col_values[~pd.isna(col_values)]
+            audio_feature_averages_scaled[col] = round(float(valid_values.mean()), 4) if len(valid_values) > 0 else None
+
         clusters.append({
             "playlist_id": str(uuid.uuid4()),
             "cluster_id": int(cluster_id),
             "song_count": int(mask.sum()),
             "duration_ms": int(cluster_songs["duration_ms"].sum()) if "duration_ms" in df.columns else None,
             "tracks": tracks,
+            "audio_feature_averages": audio_feature_averages,
+            "audio_feature_averages_scaled": audio_feature_averages_scaled,
         })
 
     return {
@@ -416,7 +430,74 @@ async def get_generation(generation_id: str):
     generation_file = GENERATIONS_DIR / f"{generation_id}.json"
     if not generation_file.exists():
         raise HTTPException(status_code=404, detail="Generation not found.")
-    return json.loads(generation_file.read_text())
+    data = json.loads(generation_file.read_text())
+
+    conn = get_db()
+    archived_rows = conn.execute(
+        "SELECT item_id FROM archive_items WHERE item_type = 'playlist' AND generation_id = ?",
+        (generation_id,),
+    ).fetchall()
+    conn.close()
+    archived_playlist_ids = {row["item_id"] for row in archived_rows}
+
+    data["clusters"] = [
+        c for c in data.get("clusters", []) if c.get("playlist_id") not in archived_playlist_ids
+    ]
+
+    return data
+
+@app.get("/generations/{generation_id}/playlists/{playlist_id}/radar")
+async def get_playlist_radar_data(generation_id: str, playlist_id: str):
+    generation_file = GENERATIONS_DIR / f"{generation_id}.json"
+    if not generation_file.exists():
+        raise HTTPException(status_code=404, detail="Generation not found.")
+
+    data = json.loads(generation_file.read_text())
+    cluster = next((c for c in data.get("clusters", []) if c.get("playlist_id") == playlist_id), None)
+    if cluster is None:
+        raise HTTPException(status_code=404, detail="Playlist not found in this generation.")
+
+    if "audio_feature_averages" not in cluster:
+        raise HTTPException(status_code=422, detail="This playlist was generated before radar chart support was added.")
+
+    return {
+        "playlist_id": playlist_id,
+        "name": f"Playlist {cluster['cluster_id'] + 1}",
+        "features": data["used_audio_features"],
+        "scaler": data["scaler"],
+        "raw_values": cluster["audio_feature_averages"],
+        "scaled_values": cluster["audio_feature_averages_scaled"],
+    }
+
+@app.get("/generations/{generation_id}/radar")
+async def get_generation_radar_data(generation_id: str):
+    generation_file = GENERATIONS_DIR / f"{generation_id}.json"
+    if not generation_file.exists():
+        raise HTTPException(status_code=404, detail="Generation not found.")
+
+    data = json.loads(generation_file.read_text())
+    clusters = data.get("clusters", [])
+
+    if clusters and "audio_feature_averages" not in clusters[0]:
+        raise HTTPException(status_code=422, detail="This generation was created before radar chart support was added.")
+
+    playlists = [
+        {
+            "playlist_id": c["playlist_id"],
+            "name": f"Playlist {c['cluster_id'] + 1}",
+            "raw_values": c["audio_feature_averages"],
+            "scaled_values": c["audio_feature_averages_scaled"],
+        }
+        for c in clusters
+    ]
+
+    return {
+        "generation_id": generation_id,
+        "name": data["name"],
+        "features": data["used_audio_features"],
+        "scaler": data["scaler"],
+        "playlists": playlists,
+    }
 
 GENERATIONS_TRASH_DIR = GENERATIONS_DIR / "trash"
 GENERATIONS_TRASH_DIR.mkdir(exist_ok=True)
@@ -727,7 +808,7 @@ async def list_archived_items(folder_id: str | None = None):
             item["silhouette"] = generation_data["silhouette"]
         elif item["item_type"] == "playlist":
             cluster = next(
-                (c for c in generation_data["clusters"] if c["playlist_id"] == item["item_id"]),
+                (c for c in generation_data.get("clusters", []) if c.get("playlist_id") == item.get("item_id")),
                 None,
             )
             if cluster is None:
