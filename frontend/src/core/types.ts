@@ -8,10 +8,12 @@ export interface AnchoredPlaylist {
   playlistId: string
   generationId: string
   label: string
+  features: string[]
 }
 
 export interface AnchoredGeneration {
   type: 'generation'
   generationId: string
   label: string
+  features: string[]
 }

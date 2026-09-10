@@ -32,10 +32,18 @@ interface Cluster {
   song_count: number
   duration_ms: number | null
   tracks: Track[]
+  custom_name?: string
 }
 
 interface GenerationDetail extends GenerationSummary {
   clusters: Cluster[]
+}
+
+async function fetchGenerationFeatures(generationId: string): Promise<string[]> {
+  const response = await fetch(`http://localhost:8001/generations/${generationId}/features`)
+  if (!response.ok) return []
+  const data = await response.json()
+  return data.features
 }
 
 async function fetchGenerationDetail(id: string): Promise<GenerationDetail> {
@@ -80,6 +88,14 @@ async function trashPlaylist(
 
 async function renameGeneration(id: string, name: string): Promise<void> {
   await fetch(`http://localhost:8001/generations/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+}
+
+async function renamePlaylist(generationId: string, playlistId: string, name: string): Promise<void> {
+  await fetch(`http://localhost:8001/generations/${generationId}/playlists/${playlistId}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name }),
@@ -252,7 +268,10 @@ function GenerationRow({
     trashRef,
     archiveRef,
     chartsGenerationAnchorRef,
-    () => onAnchorGeneration({ type: 'generation', generationId: gen.id, label: gen.name }),
+    () =>
+      fetchGenerationFeatures(gen.id).then((features) =>
+        onAnchorGeneration({ type: 'generation', generationId: gen.id, label: gen.name, features }),
+      ),
   )
 
   return (
@@ -311,6 +330,8 @@ function PlaylistRow({
   archiveRef,
   chartsPlaylistAnchorRef,
   onAnchorPlaylist,
+  onContextMenu,
+  onOpenDetail,
 }: {
   cluster: Cluster
   generationId: string
@@ -322,6 +343,8 @@ function PlaylistRow({
   archiveRef: React.RefObject<HTMLDivElement | null>
   chartsPlaylistAnchorRef: React.RefObject<HTMLDivElement | null>
   onAnchorPlaylist: (anchor: import('../core/types').AnchoredPlaylist) => void
+  onContextMenu: (e: React.MouseEvent) => void
+  onOpenDetail: () => void
 }) {
 
   const previewSize = { width: 160, height: 36 }
@@ -333,12 +356,15 @@ function PlaylistRow({
     archiveRef,
     chartsPlaylistAnchorRef,
     () =>
-      onAnchorPlaylist({
-        type: 'playlist',
-        playlistId: cluster.playlist_id,
-        generationId,
-        label: `Playlist ${cluster.cluster_id + 1}`,
-      }),
+      fetchGenerationFeatures(generationId).then((features) =>
+        onAnchorPlaylist({
+          type: 'playlist',
+          playlistId: cluster.playlist_id,
+          generationId,
+          label: cluster.custom_name ?? `Playlist ${cluster.cluster_id + 1}`,
+          features,
+        }),
+      ),
   )
 
   return (
@@ -362,9 +388,14 @@ function PlaylistRow({
 
             onToggleExpand()
           }}
+          onContextMenu={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            onContextMenu(e)
+          }}
           className="w-full flex items-center justify-between px-2 py-1.5 text-left cursor-grab active:cursor-grabbing"
         >
-          <span className="text-xs font-body text-white/90">Playlist {cluster.cluster_id + 1}</span>
+          <span className="text-xs font-body text-white/90">{cluster.custom_name ?? `Playlist ${cluster.cluster_id + 1}`}</span>
           <span className="text-[10px] font-body text-white/50">
             {cluster.song_count} songs · {formatDuration(cluster.duration_ms)}
           </span>
@@ -372,6 +403,13 @@ function PlaylistRow({
 
         {isExpanded && (
           <div className="px-2 pb-2 space-y-1">
+            <button
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => { e.stopPropagation(); onOpenDetail() }}
+              className="text-[10px] font-body text-white/50 hover:text-white/90 underline mb-1"
+            >
+              🔍 Open Detail View
+            </button>
             {cluster.tracks.map((track, i) => (
               <div key={i} className="text-[10px] font-body text-white/70 truncate">
                 {track.name} — {track.artist}
@@ -384,7 +422,8 @@ function PlaylistRow({
       {previewPos &&
         createPortal(
           <div className="fixed z-50 pointer-events-none" style={{ left: previewPos.x, top: previewPos.y }}>
-            <PreviewGhost width={previewSize.width} height={previewSize.height} label={`Playlist ${cluster.cluster_id + 1}`} />
+                        <PreviewGhost width={previewSize.width} height={previewSize.height} 
+                    label={cluster.custom_name ?? `Playlist ${cluster.cluster_id + 1}`} />
           </div>,
           document.body,
         )}
@@ -404,6 +443,7 @@ export function GeneratedPlaylistsTile({
   chartsGenerationAnchorRef,
   onAnchorPlaylist,
   onAnchorGeneration,
+  onOpenPlaylistDetail,
 }: {
   startPosition: ModulePosition
   onDragEnd?: (bounds: DOMRect | undefined) => void
@@ -416,6 +456,7 @@ export function GeneratedPlaylistsTile({
   chartsGenerationAnchorRef: React.RefObject<HTMLDivElement | null>
   onAnchorPlaylist: (anchor: import('../core/types').AnchoredPlaylist) => void
   onAnchorGeneration: (anchor: import('../core/types').AnchoredGeneration) => void
+  onOpenPlaylistDetail: (generationId: string, playlistId: string) => void
 }) {
 
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -426,6 +467,9 @@ export function GeneratedPlaylistsTile({
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null)
   const [infoGenerationId, setInfoGenerationId] = useState<string | null>(null)
   const [infoData, setInfoData] = useState<GenerationDetail | null>(null)
+  const [playlistContextMenu, setPlaylistContextMenu] = useState<{ x: number; y: number; playlistId: string } | null>(null)
+  const [renamingPlaylistId, setRenamingPlaylistId] = useState<string | null>(null)
+  const [confirmingDeletePlaylistId, setConfirmingDeletePlaylistId] = useState<string | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
 
   const openDetail = async (id: string) => {
@@ -461,6 +505,14 @@ export function GeneratedPlaylistsTile({
       const updated = await fetchGenerationDetail(id)
       setDetail(updated)
     }
+  }
+
+  const handleRenamePlaylist = async (playlistId: string, newName: string) => {
+    if (!detail) return
+    await renamePlaylist(detail.id, playlistId, newName)
+    setRenamingPlaylistId(null)
+    const updated = await fetchGenerationDetail(detail.id)
+    setDetail(updated)
   }
 
   const openInfo = async (generationId: string) => {
@@ -525,7 +577,7 @@ export function GeneratedPlaylistsTile({
 
             <div className="flex-1 overflow-y-auto space-y-2">
               {detail.clusters.map((cluster) => (
-                  <PlaylistRow
+                <PlaylistRow
                   key={cluster.playlist_id}
                   cluster={cluster}
                   generationId={detail.id}
@@ -543,6 +595,10 @@ export function GeneratedPlaylistsTile({
                   archiveRef={archiveRef}
                   chartsPlaylistAnchorRef={chartsPlaylistAnchorRef}
                   onAnchorPlaylist={onAnchorPlaylist}
+                  onContextMenu={(e) =>
+                    setPlaylistContextMenu({ x: e.clientX, y: e.clientY, playlistId: cluster.playlist_id })
+                  }
+                  onOpenDetail={() => onOpenPlaylistDetail(detail.id, cluster.playlist_id)}
                 />
               ))}
             </div>
@@ -565,6 +621,48 @@ export function GeneratedPlaylistsTile({
               onSelect: () => setConfirmingDeleteId(contextMenu.generationId),
             },
           ]}
+        />
+      )}
+
+      {playlistContextMenu && (
+        <ContextMenu
+          x={playlistContextMenu.x}
+          y={playlistContextMenu.y}
+          onClose={() => setPlaylistContextMenu(null)}
+          items={[
+            { label: 'Rename', onSelect: () => setRenamingPlaylistId(playlistContextMenu.playlistId) },
+            {
+              label: 'Move to Trash',
+              destructive: true,
+              onSelect: () => setConfirmingDeletePlaylistId(playlistContextMenu.playlistId),
+            },
+          ]}
+        />
+      )}
+
+      {renamingPlaylistId && detail && (
+        <RenameDialog
+          currentName={
+            detail.clusters.find((c) => c.playlist_id === renamingPlaylistId)?.custom_name ??
+            `Playlist ${(detail.clusters.find((c) => c.playlist_id === renamingPlaylistId)?.cluster_id ?? 0) + 1}`
+          }
+          onSave={(newName) => handleRenamePlaylist(renamingPlaylistId, newName)}
+          onCancel={() => setRenamingPlaylistId(null)}
+        />
+      )}
+
+      {confirmingDeletePlaylistId && detail && (
+           <ConfirmDialog
+          message="Move this playlist to Trash?"
+          onConfirm={() => {
+            trashPlaylist(confirmingDeletePlaylistId, detail.id).then(async () => {
+              const updated = await fetchGenerationDetail(detail.id)
+              setDetail(updated)
+              onGenerationsChanged()
+            })
+            setConfirmingDeletePlaylistId(null)
+          }}
+          onCancel={() => setConfirmingDeletePlaylistId(null)}
         />
       )}
 

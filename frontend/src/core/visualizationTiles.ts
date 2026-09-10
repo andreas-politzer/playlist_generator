@@ -10,13 +10,23 @@ export type ChartSource =
   | { type: 'playlist'; generationId: string; playlistId: string }
   | { type: 'generation'; generationId: string }
 
+export interface ChartConfig {
+  mode?: 'raw' | 'scaled'
+  linkageMethod?: 'ward' | 'complete' | 'average' | 'single'
+  maxLeaves?: number
+  radarFeatures?: string[]
+  perplexity?: number
+}
+
 export interface VisualizationTile {
   id: string
   position: ModulePosition
   size: ModuleSize
   zIndex: number
-  chartType: 'radar' | 'tsne' | 'dendrogram'
+  kind: 'chart' | 'playlist-detail'
+  chartType?: 'radar' | 'tsne' | 'dendrogram'
   source: ChartSource
+  config: ChartConfig
 }
 
 const DEFAULT_SIZE: ModuleSize = { width: 480, height: 400 }
@@ -26,13 +36,20 @@ export function useVisualizationTiles() {
   const nextZRef = useRef(1)
 
   const addTile = useCallback(
-    (position: ModulePosition, chartType: VisualizationTile['chartType'], source: ChartSource) => {
+    (
+      position: ModulePosition,
+      chartType: VisualizationTile['chartType'],
+      source: ChartSource,
+      config: ChartConfig = {},
+      kind: VisualizationTile['kind'] = 'chart',
+    ) => {
       const id = crypto.randomUUID()
       nextZRef.current += 1
-      setTiles((prev) => [
-        ...prev,
-        { id, position, size: DEFAULT_SIZE, zIndex: nextZRef.current, chartType, source },
-      ])
+      setTiles((prev) => {
+        const offset = prev.length * 30
+        const offsetPosition = { x: position.x + offset, y: position.y + offset }
+        return [...prev, { id, position: offsetPosition, size: DEFAULT_SIZE, zIndex: nextZRef.current, kind, chartType, source, config }]
+      })
       return id
     },
     [],

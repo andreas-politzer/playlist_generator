@@ -7,6 +7,7 @@ import { GeneratedPlaylistsTile } from './components/GeneratedPlaylistsTile'
 import { ArchiveTile } from './components/ArchiveTile'
 import { VisualizationsTile } from './components/VisualizationsTile'
 import { ChartTile } from './components/ChartTile'
+import { PlaylistDetailTile } from './components/PlaylistDetailTile'
 import { useVisualizationTiles } from './core/visualizationTiles'
 import { RackCard } from './components/RackCard'
 import { GlassFilterDefs } from './components/GlassFilterDefs'
@@ -25,21 +26,23 @@ function App() {
   const [anchoredGeneration, setAnchoredGeneration] = useState<AnchoredGeneration | null>(null)
   const { tiles: chartTiles, addTile: addChartTile, removeTile: removeChartTile, bringTileToFront: bringChartTileToFront } = useVisualizationTiles()
 
-  const handleGeneratePlaylistChart = (chartType: 'radar' | 'tsne' | 'dendrogram') => {
+  const handleGeneratePlaylistChart = (chartType: 'radar' | 'tsne' | 'dendrogram', config: import('./core/visualizationTiles').ChartConfig) => {
     if (!anchoredPlaylist) return
     addChartTile(
       { x: 400, y: 200 },
       chartType,
       { type: 'playlist', generationId: anchoredPlaylist.generationId, playlistId: anchoredPlaylist.playlistId },
+      config,
     )
   }
 
-  const handleGenerateGenerationChart = (chartType: 'radar' | 'tsne' | 'dendrogram') => {
+  const handleGenerateGenerationChart = (chartType: 'radar' | 'tsne' | 'dendrogram', config: import('./core/visualizationTiles').ChartConfig) => {
     if (!anchoredGeneration) return
     addChartTile(
       { x: 400, y: 200 },
       chartType,
       { type: 'generation', generationId: anchoredGeneration.generationId },
+      config,
     )
   }
   const [rawListsRefreshKey, setRawListsRefreshKey] = useState(0)
@@ -162,6 +165,9 @@ function App() {
           chartsGenerationAnchorRef={chartsGenerationAnchorRef}
           onAnchorPlaylist={setAnchoredPlaylist}
           onAnchorGeneration={setAnchoredGeneration}
+          onOpenPlaylistDetail={(generationId, playlistId) =>
+            addChartTile({ x: 500, y: 150 }, undefined, { type: 'playlist', generationId, playlistId }, {}, 'playlist-detail')
+          }
         />
       )}
       
@@ -200,16 +206,30 @@ function App() {
         rackRef={rackRef}
       />
 
-      {chartTiles.map((tile) => (
-        <ChartTile
-          key={tile.id}
-          id={tile.id}
-          position={tile.position}
-          chartType={tile.chartType}
-          source={tile.source}
-          onClose={removeChartTile}
-        />
-      ))}
+      {chartTiles.map((tile) =>
+        tile.kind === 'playlist-detail' && tile.source.type === 'playlist' ? (
+          <PlaylistDetailTile
+            key={tile.id}
+            id={tile.id}
+            position={tile.position}
+            generationId={tile.source.generationId}
+            playlistId={tile.source.playlistId}
+            onClose={removeChartTile}
+          />
+        ) : tile.chartType ? (
+          <ChartTile
+            key={tile.id}
+            id={tile.id}
+            position={tile.position}
+            chartType={tile.chartType}
+            source={tile.source}
+            config={tile.config}
+            zIndex={tile.zIndex}
+            onClose={removeChartTile}
+            onFocus={bringChartTileToFront}
+          />
+        ) : null,
+      )}
     </div>
   )
 }

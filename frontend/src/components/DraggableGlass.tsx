@@ -41,14 +41,14 @@ export function DraggableGlass({
   zIndex?: number
   dark?: boolean
 }) {
-  const { position, dragHandlers } = useDraggable(initialPosition, onDragEnd)
   const { size, resizeHandlers, setSize } = useResizable(initialSize, minSize)
+  const { position, dragHandlers } = useDraggable(initialPosition, onDragEnd, size)
 
   useLayoutEffect(() => {
     if (forceMinHeight === undefined) return
 
     setSize((previous) => {
-      const nextHeight = Math.max(previous.height, forceMinHeight)
+      const nextHeight = Math.max(minSize?.height ?? 0, forceMinHeight)
       if (nextHeight === previous.height) return previous
       return { ...previous, height: nextHeight }
     })
@@ -83,7 +83,7 @@ export function DraggableGlass({
       style={{ left: position.x, top: position.y, width: size.width, height: outerHeight, zIndex }}
     >
       <GlassPane className={`w-full h-full ${className}`}>
-          {onClose && (
+        {onClose && (
           <button
             onPointerDown={(e) => e.stopPropagation()}
             onClick={onClose}
