@@ -15,6 +15,8 @@ async function moveToTrash(filename: string) {
 export function TrashCard({
   startPosition,
   onDragEnd,
+  onDragStart,
+  zIndex,
   onItemMoved,
   onGenerationRestored,
   refreshKey,
@@ -22,6 +24,8 @@ export function TrashCard({
 }: {
   startPosition: ModulePosition
   onDragEnd?: (bounds: DOMRect | undefined) => void
+  onDragStart?: () => void
+  zIndex?: number
   onItemMoved?: () => void
   onGenerationRestored?: () => void
   refreshKey?: number
@@ -36,6 +40,7 @@ export function TrashCard({
 
   const handlePointerDown = (e: React.PointerEvent) => {
     downPos.current = { x: e.clientX, y: e.clientY }
+    onDragStart?.()
     dragHandlers.onPointerDown(e)
   }
 
@@ -77,7 +82,7 @@ export function TrashCard({
     <div
       ref={actualRef}
       className="absolute"
-      style={{ left: position.x, top: position.y, width: SIZE.width, height: SIZE.height }}
+      style={{ left: position.x, top: position.y, width: SIZE.width, height: SIZE.height, zIndex }}
       onPointerDown={handlePointerDown}
       onPointerMove={dragHandlers.onPointerMove}
       onPointerUp={handlePointerUp}

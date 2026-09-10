@@ -9,6 +9,7 @@ import { VisualizationsTile } from './components/VisualizationsTile'
 import { ChartTile } from './components/ChartTile'
 import { PlaylistDetailTile } from './components/PlaylistDetailTile'
 import { useVisualizationTiles } from './core/visualizationTiles'
+import { useZIndexManager } from './core/useZIndexManager'
 import { RackCard } from './components/RackCard'
 import { GlassFilterDefs } from './components/GlassFilterDefs'
 import { useModuleLocations } from './core/moduleLocation'
@@ -25,6 +26,7 @@ function App() {
   const [anchoredPlaylist, setAnchoredPlaylist] = useState<AnchoredPlaylist | null>(null)
   const [anchoredGeneration, setAnchoredGeneration] = useState<AnchoredGeneration | null>(null)
   const { tiles: chartTiles, addTile: addChartTile, removeTile: removeChartTile, bringTileToFront: bringChartTileToFront } = useVisualizationTiles()
+  const { bringToFront, getZIndex } = useZIndexManager()
 
   const handleGeneratePlaylistChart = (chartType: 'radar' | 'tsne' | 'dendrogram', config: import('./core/visualizationTiles').ChartConfig) => {
     if (!anchoredPlaylist) return
@@ -128,11 +130,13 @@ function App() {
       )}
 
       {trashLocation.place === 'canvas' && (
-        <TrashCard
+         <TrashCard
           startPosition={trashLocation.position}
           onDragEnd={(bounds) => {
             if (checkRackOverlap(bounds)) moveToRack('trash')
           }}
+          onDragStart={() => bringToFront('trash')}
+          zIndex={getZIndex('trash')}
           onItemMoved={() => setRawListsRefreshKey((k) => k + 1)}
           onGenerationRestored={loadGenerations}
           refreshKey={trashRefreshKey}
@@ -177,6 +181,8 @@ function App() {
           onDragEnd={(bounds) => {
             if (checkRackOverlap(bounds)) moveToRack('archive')
           }}
+          onDragStart={() => bringToFront('archive')}
+          zIndex={getZIndex('archive')}
           refreshKey={archiveRefreshKey}
           onItemUnarchived={loadGenerations} 
           containerRef={archiveRef}

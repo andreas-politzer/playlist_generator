@@ -74,12 +74,16 @@ async function restoreItem(archiveItemId: string): Promise<void> {
 export function ArchiveTile({
   startPosition,
   onDragEnd,
+  onDragStart,
+  zIndex,
   refreshKey,
   onItemUnarchived,
   containerRef,
 }: {
   startPosition: ModulePosition
   onDragEnd?: (bounds: DOMRect | undefined) => void
+  onDragStart?: () => void
+  zIndex?: number
   refreshKey?: number
   onItemUnarchived?: () => void
   containerRef: React.RefObject<HTMLDivElement | null>
@@ -149,6 +153,8 @@ export function ArchiveTile({
       collapsible
       defaultOpen={true}
       onDragEnd={onDragEnd}
+      onDragStart={onDragStart}
+      zIndex={zIndex}
       containerRef={containerRef}
     >
       <div className="px-6 pb-6 flex-1 flex flex-col overflow-hidden">
