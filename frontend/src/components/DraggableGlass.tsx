@@ -13,12 +13,14 @@ export function DraggableGlass({
   initialSize,
   minSize,
   forceMinHeight,
+  forceMinWidth,
   title,
   className,
   children,
   collapsible = false,
   defaultOpen = true,
   onDragStart,
+  onDragMove,
   onDragEnd,
   onClose,
   containerRef,
@@ -29,6 +31,8 @@ export function DraggableGlass({
   initialSize: ModuleSize
   minSize?: ModuleSize
   forceMinHeight?: number
+  forceMinWidth?: number
+  onDragMove?: (position: ModulePosition) => void
   title: string
   className: string
   children: ReactNode
@@ -42,7 +46,7 @@ export function DraggableGlass({
   dark?: boolean
 }) {
   const { size, resizeHandlers, setSize } = useResizable(initialSize, minSize)
-  const { position, dragHandlers } = useDraggable(initialPosition, onDragEnd, size)
+  const { position, dragHandlers } = useDraggable(initialPosition, onDragEnd, size, onDragMove)
 
   useLayoutEffect(() => {
     if (forceMinHeight === undefined) return
@@ -53,6 +57,16 @@ export function DraggableGlass({
       return { ...previous, height: nextHeight }
     })
   }, [forceMinHeight, setSize])
+
+  useLayoutEffect(() => {
+    if (forceMinWidth === undefined) return
+
+    setSize((previous) => {
+      const nextWidth = Math.max(minSize?.width ?? 0, forceMinWidth)
+      if (nextWidth === previous.width) return previous
+      return { ...previous, width: nextWidth }
+    })
+  }, [forceMinWidth, setSize])
 
   const [isOpen, setIsOpen] = useState(defaultOpen)
   const downPos = useRef<{ x: number; y: number } | null>(null)
@@ -80,7 +94,7 @@ export function DraggableGlass({
     <div
       ref={containerRef}
       className="absolute transition-[height] duration-500 ease-[cubic-bezier(0.4,0,0.2,1)]"
-      style={{ left: position.x, top: position.y, width: size.width, height: outerHeight, zIndex }}
+      style={{ left: position.x, top: position.y, width: collapsible && !isOpen ? 'max-content' : size.width, height: outerHeight, zIndex }}
     >
       <GlassPane className={`w-full h-full ${className}`}>
         {onClose && (
@@ -102,13 +116,12 @@ export function DraggableGlass({
         >
           <span className={`font-body text-xs tracking-widest uppercase ${dark ? 'text-black' : 'text-white'}`}>{title}</span>
         </div>
-        <div
-          className="flex-1 flex flex-col overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.4,0,0.2,1)]"
-          style={{
-            transformOrigin: 'top',
-            transform: collapsible && !isOpen ? 'perspective(900px) rotateX(-85deg)' : 'perspective(900px) rotateX(0deg)',
-            opacity: collapsible && !isOpen ? 0 : 1,
-          }}
+          <div
+          className={`flex flex-col overflow-hidden transition-all duration-300 ease-[cubic-bezier(0.4,0,0.2,1)] ${
+            collapsible && !isOpen
+              ? 'w-0 max-w-0 max-h-0 opacity-0 pointer-events-none'
+              : 'flex-1 w-full max-w-none max-h-none opacity-100'
+          }`}
         >
           {children}
         </div>

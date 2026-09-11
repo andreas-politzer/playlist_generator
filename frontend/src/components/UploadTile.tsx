@@ -26,10 +26,16 @@ async function uploadSongFile(file: File): Promise<{ song_count: number }> {
 export function UploadTile({
   startPosition,
   onDragEnd,
+  onDragStart,
+  onDragMove,
+  zIndex,
   onUploadComplete,
 }: {
   startPosition: ModulePosition
   onDragEnd?: (bounds: DOMRect | undefined) => void
+  onDragStart?: () => void
+  onDragMove?: (position: import('../core/types').ModulePosition) => void
+  zIndex?: number
   onUploadComplete?: () => void
 }) {
   const [files, setFiles] = useState<FileEntry[]>([])
@@ -83,7 +89,7 @@ export function UploadTile({
   const isUploading = files.some((f) => f.status === 'uploading')
 
   return (
-    <DraggableGlass
+     <DraggableGlass
       initialPosition={startPosition}
       initialSize={{ width: 320, height: 360 }}
       title="Upload Raw Lists"
@@ -91,6 +97,9 @@ export function UploadTile({
       collapsible
       defaultOpen={false}
       onDragEnd={onDragEnd}
+      onDragStart={onDragStart}
+      onDragMove={onDragMove}
+      zIndex={zIndex}
       containerRef={containerRef}
     >
       <div className="px-6 pb-6 flex-1 flex flex-col overflow-hidden">

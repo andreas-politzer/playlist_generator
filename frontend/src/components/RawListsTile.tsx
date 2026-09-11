@@ -21,10 +21,16 @@ async function deleteRawList(filename: string): Promise<void> {
 export function RawListsTile({
   startPosition,
   onDragEnd,
+  onDragStart,
+  onDragMove,
+  zIndex,
   refreshKey,
 }: {
   startPosition: ModulePosition
   onDragEnd?: (bounds: DOMRect | undefined) => void
+  onDragStart?: () => void
+  onDragMove?: (position: import('../core/types').ModulePosition) => void
+  zIndex?: number
   refreshKey?: number
 }) {
   const [lists, setLists] = useState<RawList[]>([])
@@ -52,6 +58,9 @@ export function RawListsTile({
       collapsible
       defaultOpen={true}
       onDragEnd={onDragEnd}
+      onDragStart={onDragStart}
+      onDragMove={onDragMove}
+      zIndex={zIndex}
       containerRef={containerRef}
     >
       <div className="px-6 pb-6 flex-1 flex flex-col overflow-hidden">

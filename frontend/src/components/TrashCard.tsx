@@ -16,6 +16,7 @@ export function TrashCard({
   startPosition,
   onDragEnd,
   onDragStart,
+  onDragMove,
   zIndex,
   onItemMoved,
   onGenerationRestored,
@@ -25,13 +26,14 @@ export function TrashCard({
   startPosition: ModulePosition
   onDragEnd?: (bounds: DOMRect | undefined) => void
   onDragStart?: () => void
+  onDragMove?: (position: import('../core/types').ModulePosition) => void
   zIndex?: number
   onItemMoved?: () => void
   onGenerationRestored?: () => void
   refreshKey?: number
   containerRef?: React.RefObject<HTMLDivElement | null>
 }) {
-  const { position, dragHandlers } = useDraggable(startPosition, onDragEnd)
+    const { position, dragHandlers } = useDraggable(startPosition, onDragEnd, undefined, onDragMove)
   const localRef = useRef<HTMLDivElement>(null)
   const actualRef = containerRef ?? localRef
   const [isDropTarget, setIsDropTarget] = useState(false)

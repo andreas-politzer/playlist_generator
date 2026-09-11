@@ -282,6 +282,9 @@ function AnchorSection({
 export function VisualizationsTile({
   startPosition,
   onDragEnd,
+  onDragStart,
+  onDragMove,
+  zIndex,
   playlistAnchorRef,
   generationAnchorRef,
   anchoredPlaylist,
@@ -301,6 +304,9 @@ export function VisualizationsTile({
   onClearGeneration: () => void
   onGeneratePlaylistChart: (chartType: ChartType, config: import('../core/visualizationTiles').ChartConfig) => void
   onGenerateGenerationChart: (chartType: ChartType, config: import('../core/visualizationTiles').ChartConfig) => void
+  onDragStart?: () => void
+  onDragMove?: (position: import('../core/types').ModulePosition) => void
+  zIndex?: number
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
@@ -330,6 +336,9 @@ export function VisualizationsTile({
       collapsible
       defaultOpen={true}
       onDragEnd={onDragEnd}
+      onDragStart={onDragStart}
+      onDragMove={onDragMove}
+      zIndex={zIndex}
       containerRef={containerRef}
     >
        <div ref={contentRef} className="px-6 pb-6 flex flex-col gap-4 overflow-visible">

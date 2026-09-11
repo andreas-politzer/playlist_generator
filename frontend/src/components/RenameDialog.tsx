@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { createPortal } from 'react-dom'
 
 export function RenameDialog({
   currentName,
@@ -23,9 +24,9 @@ export function RenameDialog({
     if (trimmed) onSave(trimmed)
   }
 
-  return (
+  return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50"
       onPointerDown={(e) => {
         if (e.target === e.currentTarget) onCancel()
       }}
@@ -61,6 +62,7 @@ export function RenameDialog({
           </button>
         </div>
       </form>
-    </div>
+    </div>,
+    document.body,
   )
 }

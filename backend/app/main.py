@@ -349,7 +349,11 @@ async def generate_playlists(filename: str, request: GenerateRequest):
     else:
         raise HTTPException(status_code=422, detail=f"Unknown algorithm: {request.algorithm}")
 
-    score = round(float(silhouette_score(X_for_clustering, labels)), 3) if k > 1 else None
+    if k > 1:
+        silhouette_sample_size = 5000 if len(X_for_clustering) > 5000 else None
+        score = round(float(silhouette_score(X_for_clustering, labels, sample_size=silhouette_sample_size, random_state=request.expert.random_state)), 3)
+    else:
+        score = None
 
     name_col = next((c for c in ["name", "song_name", "title"] if c in df.columns), None)
     artist_col = "artist" if "artist" in df.columns else None
@@ -1336,3 +1340,22 @@ async def add_track(generation_id: str, playlist_id: str, request: AddTrackReque
 
     generation_file.write_text(json.dumps(data))
     return {"status": "added", "track_id": new_track["track_id"], "total_tracks": len(tracks)}
+
+class UpdateNoteRequest(BaseModel):
+    note: str
+
+
+@app.post("/generations/{generation_id}/playlists/{playlist_id}/note")
+async def update_playlist_note(generation_id: str, playlist_id: str, request: UpdateNoteRequest):
+    generation_file = GENERATIONS_DIR / f"{generation_id}.json"
+    if not generation_file.exists():
+        raise HTTPException(status_code=404, detail="Generation not found.")
+
+    data = json.loads(generation_file.read_text())
+    cluster = next((c for c in data.get("clusters", []) if c.get("playlist_id") == playlist_id), None)
+    if cluster is None:
+        raise HTTPException(status_code=404, detail="Playlist not found.")
+
+    cluster["note"] = request.note
+    generation_file.write_text(json.dumps(data))
+    return {"status": "saved"}

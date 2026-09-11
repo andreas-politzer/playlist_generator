@@ -36,22 +36,26 @@ export function RackCard({
   locations,
   onPullOut,
   rackRef,
+  isDragOver = false,
 }: {
   locations: Record<ModuleId, Location>
   onPullOut: (id: ModuleId, position: ModulePosition) => void
   rackRef: React.RefObject<HTMLDivElement | null>
+  isDragOver?: boolean
 }) {
   const modulesInRack = (Object.keys(locations) as ModuleId[]).filter((id) => locations[id].place === 'rack')
   const minSize = calculateMinSize(modulesInRack.length)
 
   return (
-    <DraggableGlass
+     <DraggableGlass
       containerRef={rackRef}
       initialPosition={{ x: 180, y: 580 }}
       initialSize={minSize}
       minSize={minSize}
+      forceMinHeight={minSize.height}
+      forceMinWidth={minSize.width}
       title="Rack"
-      className="rounded-3xl"
+      className={`rounded-3xl transition-all duration-200 ${isDragOver ? 'ring-2 ring-white/60 scale-[1.02]' : ''}`}
       collapsible
       defaultOpen={false}
     >

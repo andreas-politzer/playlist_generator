@@ -434,6 +434,9 @@ function PlaylistRow({
 export function GeneratedPlaylistsTile({
   startPosition,
   onDragEnd,
+  onDragStart,
+  onDragMove,
+  zIndex,
   generations,
   onGenerationsChanged,
   onArchiveChanged,
@@ -447,6 +450,9 @@ export function GeneratedPlaylistsTile({
 }: {
   startPosition: ModulePosition
   onDragEnd?: (bounds: DOMRect | undefined) => void
+  onDragStart?: () => void
+  onDragMove?: (position: import('../core/types').ModulePosition) => void
+  zIndex?: number
   generations: GenerationSummary[]
   onGenerationsChanged: () => void
   onArchiveChanged: () => void
@@ -527,7 +533,7 @@ export function GeneratedPlaylistsTile({
   }
 
   return (
-    <DraggableGlass
+     <DraggableGlass
       initialPosition={startPosition}
       initialSize={{ width: 360, height: 420 }}
       title="Music Library"
@@ -535,6 +541,9 @@ export function GeneratedPlaylistsTile({
       collapsible
       defaultOpen={true}
       onDragEnd={onDragEnd}
+      onDragStart={onDragStart}
+      onDragMove={onDragMove}
+      zIndex={zIndex}
       containerRef={containerRef}
     >
       <div className="px-6 pb-6 flex-1 flex flex-col overflow-hidden">

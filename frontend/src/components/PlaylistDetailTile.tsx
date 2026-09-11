@@ -48,6 +48,15 @@ async function addTrack(
   if (!response.ok) throw new Error('Failed to add track.')
 }
 
+async function updateNote(generationId: string, playlistId: string, note: string): Promise<void> {
+  const response = await fetch(`http://localhost:8001/generations/${generationId}/playlists/${playlistId}/note`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note }),
+  })
+  if (!response.ok) throw new Error('Failed to save note.')
+}
+
 function formatDuration(ms: number | null): string {
   if (ms === null) return '—'
   const totalSeconds = Math.round(ms / 1000)
@@ -61,13 +70,17 @@ export function PlaylistDetailTile({
   position,
   generationId,
   playlistId,
+  zIndex,
   onClose,
+  onFocus,
 }: {
   id: string
   position: ModulePosition
   generationId: string
   playlistId: string
+  zIndex: number
   onClose: (id: string) => void
+  onFocus: (id: string) => void
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [data, setData] = useState<PlaylistDetailData | null>(null)
@@ -77,12 +90,25 @@ export function PlaylistDetailTile({
   const [newTrackName, setNewTrackName] = useState('')
   const [newTrackArtist, setNewTrackArtist] = useState('')
   const [confirmingRemoveTrackId, setConfirmingRemoveTrackId] = useState<string | null>(null)
+  const [noteValue, setNoteValue] = useState('')
+  const [noteSaved, setNoteSaved] = useState(true)
+  const noteSaveTimeout = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const reload = () => {
+  const handleNoteChange = (value: string) => {
+    setNoteValue(value)
+    setNoteSaved(false)
+    if (noteSaveTimeout.current) clearTimeout(noteSaveTimeout.current)
+    noteSaveTimeout.current = setTimeout(() => {
+      updateNote(generationId, playlistId, value).then(() => setNoteSaved(true))
+    }, 800)
+  }
+
+   const reload = () => {
     fetchPlaylistDetail(generationId, playlistId)
       .then((result) => {
         setData(result)
         setVisibleColumns(new Set(result.metadata_keys))
+        setNoteValue(result.note)
       })
       .catch((err) => setError(err instanceof Error ? err.message : 'Unknown error'))
   }
@@ -112,6 +138,10 @@ export function PlaylistDetailTile({
       initialSize={{ width: 480, height: 420 }}
       title={data?.name ?? 'Playlist'}
       className="rounded-3xl"
+      collapsible
+      defaultOpen={true}
+      onDragStart={() => onFocus(id)}
+      zIndex={zIndex}
       onClose={() => onClose(id)}
       containerRef={containerRef}
     >
@@ -183,6 +213,21 @@ export function PlaylistDetailTile({
                   ))}
                 </tbody>
               </table>
+            </div>
+
+            <div className="shrink-0 flex flex-col gap-1">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-body uppercase tracking-widest text-white/50">Note</span>
+                <span className="text-[9px] font-body text-white/30">{noteSaved ? 'Saved' : 'Saving...'}</span>
+              </div>
+              <textarea
+                value={noteValue}
+                onChange={(e) => handleNoteChange(e.target.value)}
+                onPointerDown={(e) => e.stopPropagation()}
+                placeholder="Add a note about this playlist..."
+                rows={2}
+                className="bg-white/5 border border-white/20 rounded-lg px-2 py-1 text-xs text-white font-body resize-none focus:outline-none focus:border-white/50"
+              />
             </div>
 
             {!showAddForm && (

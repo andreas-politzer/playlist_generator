@@ -57,10 +57,16 @@ async function saveGeneration(
 export function GenerateTile({
   startPosition,
   onDragEnd,
+  onDragStart,
+  onDragMove,
+  zIndex,
   onGenerated,
 }: {
   startPosition: ModulePosition
   onDragEnd?: (bounds: DOMRect | undefined) => void
+  onDragStart?: () => void
+  onDragMove?: (position: import('../core/types').ModulePosition) => void
+  zIndex?: number
   onGenerated?: () => void
 }) {
   const [sourceFile, setSourceFile] = useState<string | null>(null)
@@ -165,6 +171,9 @@ export function GenerateTile({
       collapsible
       defaultOpen={true}
       onDragEnd={onDragEnd}
+      onDragStart={onDragStart}
+      onDragMove={onDragMove}
+      zIndex={zIndex}
       containerRef={containerRef}
     >
       <div

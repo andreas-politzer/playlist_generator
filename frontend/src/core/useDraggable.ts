@@ -8,6 +8,7 @@ export function useDraggable(
   initial: ModulePosition,
   onDragEnd?: (ownBounds: DOMRect | undefined) => void,
   size?: { width: number; height: number },
+  onDragMove?: (position: ModulePosition) => void,
 ) {
   const [position, setPosition] = useState<ModulePosition>(initial)
   const dragState = useRef<{ startX: number; startY: number; origin: ModulePosition } | null>(null)
@@ -41,8 +42,9 @@ export function useDraggable(
       nextY = Math.min(Math.max(nextY, minY), maxY)
 
       setPosition({ x: nextX, y: nextY })
+      onDragMove?.({ x: nextX, y: nextY })
     },
-    [size],
+    [size, onDragMove],
   )
 
   const onPointerUp = useCallback(

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import { DraggableGlass } from './DraggableGlass'
 import { ArchiveFolderRow } from './ArchiveFolderRow'
 import type { ModulePosition } from '../core/types'
@@ -75,6 +76,7 @@ export function ArchiveTile({
   startPosition,
   onDragEnd,
   onDragStart,
+  onDragMove,
   zIndex,
   refreshKey,
   onItemUnarchived,
@@ -83,6 +85,7 @@ export function ArchiveTile({
   startPosition: ModulePosition
   onDragEnd?: (bounds: DOMRect | undefined) => void
   onDragStart?: () => void
+  onDragMove?: (position: import('../core/types').ModulePosition) => void
   zIndex?: number
   refreshKey?: number
   onItemUnarchived?: () => void
@@ -154,6 +157,7 @@ export function ArchiveTile({
       defaultOpen={true}
       onDragEnd={onDragEnd}
       onDragStart={onDragStart}
+      onDragMove={onDragMove}
       zIndex={zIndex}
       containerRef={containerRef}
     >
@@ -230,7 +234,7 @@ export function ArchiveTile({
         </form>
       </div>
 
-      {movingItem && (
+      {movingItem && createPortal(
         <div
           className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50"
           onPointerDown={(e) => {
@@ -261,7 +265,8 @@ export function ArchiveTile({
               Cancel
             </button>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </DraggableGlass>
   )

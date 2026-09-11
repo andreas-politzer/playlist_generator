@@ -12,11 +12,15 @@ interface GenerationInfo {
   agglomerative: { n_clusters: number; linkage: string }
   gmm: { n_components: number }
   dbscan: { epsilon: number; min_samples: number }
+  hdbscan: { min_cluster_size: number; min_samples: number | null }
+  dimensionality_reduction?: { method: string; requested_n_components: number; actual_n_components: number | null; kernel: string | null }
+  expert?: { n_init: number; max_iter: number; random_state: number }
 }
 
 const ALGORITHM_LABELS: Record<string, string> = {
   kmeans: 'K-Means',
   dbscan: 'DBSCAN',
+  hdbscan: 'HDBSCAN',
   agglomerative: 'Agglomerative Clustering',
   gmm: 'Gaussian Mixture Model',
 }
@@ -44,6 +48,11 @@ function algorithmSpecificDetails(info: GenerationInfo): string[] {
       return [`Number of components: ${info.gmm.n_components}`]
     case 'dbscan':
       return [`Epsilon: ${info.dbscan.epsilon}`, `Min samples: ${info.dbscan.min_samples}`]
+    case 'hdbscan':
+      return [
+        `Min cluster size: ${info.hdbscan.min_cluster_size}`,
+        info.hdbscan.min_samples !== null ? `Min samples: ${info.hdbscan.min_samples}` : 'Min samples: auto',
+      ]
     default:
       return []
   }
@@ -98,6 +107,31 @@ export function GenerationInfoDialog({
         {algorithmSpecificDetails(info).map((line, i) => (
           <div key={i} className="text-white/70">{line}</div>
         ))}
+
+        {info.dimensionality_reduction && info.dimensionality_reduction.method !== 'none' && (
+          <>
+            <div className="border-t border-white/10 my-1" />
+            <span className="text-white/50">Dimensionality reduction</span>
+            <span className="text-white/70">
+              {info.dimensionality_reduction.method === 'pca' ? 'PCA' : 'Kernel PCA'}
+              {info.dimensionality_reduction.kernel ? ` (${info.dimensionality_reduction.kernel})` : ''}
+              {' — '}
+              {info.dimensionality_reduction.actual_n_components !== null
+                ? `${info.dimensionality_reduction.actual_n_components} components`
+                : 'not applied (too few features)'}
+            </span>
+          </>
+        )}
+
+        {info.expert && (
+          <>
+            <div className="border-t border-white/10 my-1" />
+            <span className="text-white/50">Algorithm parameters</span>
+            <span className="text-white/70">
+              n_init: {info.expert.n_init}, max_iter: {info.expert.max_iter}, random_state: {info.expert.random_state}
+            </span>
+          </>
+        )}
 
         <div className="border-t border-white/10 my-1" />
 

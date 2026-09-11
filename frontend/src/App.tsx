@@ -13,7 +13,7 @@ import { useZIndexManager } from './core/useZIndexManager'
 import { RackCard } from './components/RackCard'
 import { GlassFilterDefs } from './components/GlassFilterDefs'
 import { useModuleLocations } from './core/moduleLocation'
-import type { AnchoredPlaylist, AnchoredGeneration } from './core/types'
+import type { AnchoredPlaylist, AnchoredGeneration, ModulePosition } from './core/types'
 import tapeBackground from './assets/backgrounds/Tape2.jpg'
 
 function App() {
@@ -25,8 +25,8 @@ function App() {
   const chartsGenerationAnchorRef = useRef<HTMLDivElement>(null)
   const [anchoredPlaylist, setAnchoredPlaylist] = useState<AnchoredPlaylist | null>(null)
   const [anchoredGeneration, setAnchoredGeneration] = useState<AnchoredGeneration | null>(null)
-  const { tiles: chartTiles, addTile: addChartTile, removeTile: removeChartTile, bringTileToFront: bringChartTileToFront } = useVisualizationTiles()
   const { bringToFront, getZIndex } = useZIndexManager()
+  const { tiles: chartTiles, addTile: addChartTile, removeTile: removeChartTile, bringTileToFront: bringChartTileToFront } = useVisualizationTiles({ bringToFront })
 
   const handleGeneratePlaylistChart = (chartType: 'radar' | 'tsne' | 'dendrogram', config: import('./core/visualizationTiles').ChartConfig) => {
     if (!anchoredPlaylist) return
@@ -63,6 +63,7 @@ function App() {
     loadGenerations()
   }, [loadGenerations])
   const [archiveRefreshKey, setArchiveRefreshKey] = useState(0)
+  const [isDraggingOverRack, setIsDraggingOverRack] = useState(false)
 
   const uploadLocation = locations.upload
   const rawListsLocation = locations.rawLists
@@ -82,6 +83,19 @@ function App() {
       bounds.top < rackBounds.bottom &&
       bounds.bottom > rackBounds.top
     )
+  }
+
+  const RACK_PROXIMITY_MARGIN = 50
+
+  const handleModuleDragMove = (position: ModulePosition) => {
+    const rackBounds = rackRef.current?.getBoundingClientRect()
+    if (!rackBounds) return
+    const isNear =
+      position.x < rackBounds.right + RACK_PROXIMITY_MARGIN &&
+      position.x + 40 > rackBounds.left - RACK_PROXIMITY_MARGIN &&
+      position.y < rackBounds.bottom + RACK_PROXIMITY_MARGIN &&
+      position.y + 40 > rackBounds.top - RACK_PROXIMITY_MARGIN
+    setIsDraggingOverRack(isNear)
   }
 
   return (
@@ -115,16 +129,22 @@ function App() {
           onDragEnd={(bounds) => {
             if (checkRackOverlap(bounds)) moveToRack('upload')
           }}
+          onDragStart={() => bringToFront('upload')}
+          onDragMove={handleModuleDragMove}
+          zIndex={getZIndex('upload')}
           onUploadComplete={() => setRawListsRefreshKey((k) => k + 1)}
         />
       )}
 
       {rawListsLocation.place === 'canvas' && (
-        <RawListsTile
+         <RawListsTile
           startPosition={rawListsLocation.position}
           onDragEnd={(bounds) => {
             if (checkRackOverlap(bounds)) moveToRack('rawLists')
           }}
+          onDragStart={() => bringToFront('rawLists')}
+          onDragMove={handleModuleDragMove}
+          zIndex={getZIndex('rawLists')}
           refreshKey={rawListsRefreshKey}
         />
       )}
@@ -136,6 +156,7 @@ function App() {
             if (checkRackOverlap(bounds)) moveToRack('trash')
           }}
           onDragStart={() => bringToFront('trash')}
+          onDragMove={handleModuleDragMove}
           zIndex={getZIndex('trash')}
           onItemMoved={() => setRawListsRefreshKey((k) => k + 1)}
           onGenerationRestored={loadGenerations}
@@ -150,6 +171,9 @@ function App() {
           onDragEnd={(bounds) => {
             if (checkRackOverlap(bounds)) moveToRack('generate')
           }}
+          onDragStart={() => bringToFront('generate')}
+          onDragMove={handleModuleDragMove}
+          zIndex={getZIndex('generate')}
           onGenerated={loadGenerations}
         />
       )}
@@ -160,6 +184,9 @@ function App() {
           onDragEnd={(bounds) => {
             if (checkRackOverlap(bounds)) moveToRack('generatedPlaylists')
           }}
+          onDragStart={() => bringToFront('generatedPlaylists')}
+          onDragMove={handleModuleDragMove}
+          zIndex={getZIndex('generatedPlaylists')}
           generations={generations}
           onGenerationsChanged={loadGenerations}
           onArchiveChanged={() => setArchiveRefreshKey((k) => k + 1)}
@@ -182,6 +209,7 @@ function App() {
             if (checkRackOverlap(bounds)) moveToRack('archive')
           }}
           onDragStart={() => bringToFront('archive')}
+          onDragMove={handleModuleDragMove}
           zIndex={getZIndex('archive')}
           refreshKey={archiveRefreshKey}
           onItemUnarchived={loadGenerations} 
@@ -195,6 +223,9 @@ function App() {
           onDragEnd={(bounds) => {
             if (checkRackOverlap(bounds)) moveToRack('visualizations')
           }}
+          onDragStart={() => bringToFront('visualizations')}
+          onDragMove={handleModuleDragMove}
+          zIndex={getZIndex('visualizations')}
           playlistAnchorRef={chartsPlaylistAnchorRef}
           generationAnchorRef={chartsGenerationAnchorRef}
           anchoredPlaylist={anchoredPlaylist}
@@ -206,10 +237,11 @@ function App() {
         />
       )}
 
-      <RackCard
+       <RackCard
         locations={locations}
         onPullOut={(id, position) => moveToCanvas(id, position)}
         rackRef={rackRef}
+        isDragOver={isDraggingOverRack}
       />
 
       {chartTiles.map((tile) =>
@@ -220,7 +252,9 @@ function App() {
             position={tile.position}
             generationId={tile.source.generationId}
             playlistId={tile.source.playlistId}
+            zIndex={getZIndex(tile.id)}
             onClose={removeChartTile}
+            onFocus={bringChartTileToFront}
           />
         ) : tile.chartType ? (
           <ChartTile
@@ -230,7 +264,7 @@ function App() {
             chartType={tile.chartType}
             source={tile.source}
             config={tile.config}
-            zIndex={tile.zIndex}
+            zIndex={getZIndex(tile.id)}
             onClose={removeChartTile}
             onFocus={bringChartTileToFront}
           />

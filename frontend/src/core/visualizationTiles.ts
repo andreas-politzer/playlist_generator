@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback } from 'react'
 import type { ModulePosition } from './types'
 
 export interface ModuleSize {
@@ -22,7 +22,6 @@ export interface VisualizationTile {
   id: string
   position: ModulePosition
   size: ModuleSize
-  zIndex: number
   kind: 'chart' | 'playlist-detail'
   chartType?: 'radar' | 'tsne' | 'dendrogram'
   source: ChartSource
@@ -31,9 +30,8 @@ export interface VisualizationTile {
 
 const DEFAULT_SIZE: ModuleSize = { width: 480, height: 400 }
 
-export function useVisualizationTiles() {
+export function useVisualizationTiles(zIndexManager: { bringToFront: (id: string) => void }) {
   const [tiles, setTiles] = useState<VisualizationTile[]>([])
-  const nextZRef = useRef(1)
 
   const addTile = useCallback(
     (
@@ -44,15 +42,15 @@ export function useVisualizationTiles() {
       kind: VisualizationTile['kind'] = 'chart',
     ) => {
       const id = crypto.randomUUID()
-      nextZRef.current += 1
       setTiles((prev) => {
         const offset = prev.length * 30
         const offsetPosition = { x: position.x + offset, y: position.y + offset }
-        return [...prev, { id, position: offsetPosition, size: DEFAULT_SIZE, zIndex: nextZRef.current, kind, chartType, source, config }]
+        return [...prev, { id, position: offsetPosition, size: DEFAULT_SIZE, kind, chartType, source, config }]
       })
+      zIndexManager.bringToFront(id)
       return id
     },
-    [],
+    [zIndexManager],
   )
 
   const removeTile = useCallback((id: string) => {
@@ -63,11 +61,5 @@ export function useVisualizationTiles() {
     setTiles((prev) => prev.map((tile) => (tile.id === id ? { ...tile, position } : tile)))
   }, [])
 
-  const bringTileToFront = useCallback((id: string) => {
-    nextZRef.current += 1
-    const nextZ = nextZRef.current
-    setTiles((prev) => prev.map((tile) => (tile.id === id ? { ...tile, zIndex: nextZ } : tile)))
-  }, [])
-
-  return { tiles, addTile, removeTile, updateTilePosition, bringTileToFront }
+  return { tiles, addTile, removeTile, updateTilePosition, bringTileToFront: zIndexManager.bringToFront }
 }
