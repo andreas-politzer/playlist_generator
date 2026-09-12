@@ -10,6 +10,8 @@ export type ChartSource =
   | { type: 'playlist'; generationId: string; playlistId: string }
   | { type: 'generation'; generationId: string }
 
+export type TileKind = 'chart' | 'playlist-detail' | 'quality-result' | 'silhouette-plot'
+
 export interface ChartConfig {
   mode?: 'raw' | 'scaled'
   linkageMethod?: 'ward' | 'complete' | 'average' | 'single'
@@ -22,7 +24,7 @@ export interface VisualizationTile {
   id: string
   position: ModulePosition
   size: ModuleSize
-  kind: 'chart' | 'playlist-detail'
+  kind: TileKind
   chartType?: 'radar' | 'tsne' | 'dendrogram'
   source: ChartSource
   config: ChartConfig

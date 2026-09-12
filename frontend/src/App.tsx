@@ -10,6 +10,8 @@ import { QualityStreetTile } from './components/QualityStreetTile'
 import { QualityResultTile } from './components/QualityResultTile'
 import { ChartTile } from './components/ChartTile'
 import { PlaylistDetailTile } from './components/PlaylistDetailTile'
+import { DraggableGlass } from './components/DraggableGlass'
+import { SilhouetteCanvas } from './components/SilhouetteCanvas'
 import { useVisualizationTiles } from './core/visualizationTiles'
 import { useZIndexManager } from './core/useZIndexManager'
 import { RackCard } from './components/RackCard'
@@ -249,8 +251,8 @@ function App() {
         />
       )}
 
-       {qualityStreetLocation.place === 'canvas' && (
-         <QualityStreetTile
+      {qualityStreetLocation.place === 'canvas' && (
+        <QualityStreetTile
           startPosition={qualityStreetLocation.position}
           onDragEnd={(bounds) => {
             if (checkRackOverlap(bounds)) moveToRack('qualityStreet')
@@ -264,10 +266,19 @@ function App() {
           anchoredGeneration={qualityAnchoredGeneration}
           onClearPlaylist={() => setQualityAnchoredPlaylist(null)}
           onClearGeneration={() => setQualityAnchoredGeneration(null)}
+          onOpenSilhouettePlot={(generationId) => {
+            addChartTile(
+              { x: 650, y: 180 },
+              undefined,
+              { type: 'generation', generationId },
+              { generationId } as any,
+              'silhouette-plot'
+            )
+          }}
         />
       )}
 
-       <RackCard
+      <RackCard
         locations={locations}
         onPullOut={(id, position) => moveToCanvas(id, position)}
         rackRef={rackRef}
@@ -297,6 +308,21 @@ function App() {
             onClose={removeChartTile}
             onFocus={bringChartTileToFront}
           />
+        ) : (tile.kind as any) === 'silhouette-plot' ? (
+          <DraggableGlass
+            key={tile.id}
+            initialPosition={tile.position}
+            initialSize={{ width: 460, height: 380 }}
+            title="Silhouette Plot"
+            className="rounded-3xl"
+            collapsible
+            defaultOpen={true}
+            zIndex={getZIndex(tile.id)}
+            onClose={() => removeChartTile(tile.id)}
+            onDragStart={() => bringChartTileToFront(tile.id)}
+          >
+            <SilhouetteTileContent generationId={(tile.config as any)?.generationId ?? (tile.source as any)?.generationId} />
+          </DraggableGlass>
         ) : tile.chartType ? (
           <ChartTile
             key={tile.id}
@@ -309,10 +335,32 @@ function App() {
             onClose={removeChartTile}
             onFocus={bringChartTileToFront}
           />
-        ) : null,
+        ) : null
       )}
     </div>
   )
+}
+
+function SilhouetteTileContent({ generationId }: { generationId?: string }) {
+  const [data, setData] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    if (!generationId) return
+    fetch(`http://localhost:8001/generations/${generationId}/quality/silhouette`)
+      .then((res) => res.json())
+      .then((d) => {
+        setData(d)
+        setLoading(false)
+      })
+      .catch(() => setLoading(false))
+  }, [generationId])
+
+  if (loading) {
+    return <div className="p-4 text-xs font-body text-white/40">Loading Silhouette data...</div>
+  }
+
+  return <SilhouetteCanvas data={data} />
 }
 
 export default App

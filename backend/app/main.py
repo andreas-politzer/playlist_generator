@@ -1706,3 +1706,60 @@ def compute_playlist_quality(generation_id: str, playlist_id: str) -> dict:
 @app.get("/generations/{generation_id}/playlists/{playlist_id}/quality")
 async def get_playlist_quality(generation_id: str, playlist_id: str):
     return compute_playlist_quality(generation_id, playlist_id)
+
+from sklearn.metrics import silhouette_samples
+
+@app.get("/generations/{generation_id}/quality/silhouette")
+def get_silhouette_samples_api(generation_id: str):
+    gen_file = GENERATIONS_DIR / f"{generation_id}.json"
+    if not gen_file.exists():
+        raise HTTPException(status_code=404, detail="Generation not found")
+    
+    with open(gen_file, "r") as f:
+        data = json.load(f)
+
+    tracks, labels = [], []
+    clusters = data.get("clusters", [])
+    
+    feature_names = data.get("used_audio_features", [])
+    for c_idx, cluster in enumerate(clusters):
+        for t in cluster.get("tracks", []):
+            scaled = t.get("audio_features_scaled")
+            if not scaled or not isinstance(scaled, dict):
+                continue
+            vector = [scaled.get(f) for f in feature_names]
+            if any(v is None for v in vector):
+                continue
+            tracks.append(vector)
+            labels.append(c_idx)
+
+    if len(tracks) < 2 or len(set(labels)) < 2:
+        return {"available": False, "reason": "Insufficient valid clusters or tracks."}
+
+    X = np.array(tracks)
+    y = np.array(labels)
+
+    # Schutz vor Ausreißern (> 6.000 Songs), damit eure 5.235er-Liste voll ausgewertet wird
+    if len(X) > 6000:
+        rng = np.random.default_rng(42)
+        indices = rng.choice(len(X), size=6000, replace=False)
+        X, y = X[indices], y[indices]
+
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+
+    sample_values = silhouette_samples(X_scaled, y)
+    avg_score = float(np.mean(sample_values))
+
+    # Strukturieren der Werte nach Clustern (absteigend sortiert für saubere Balken)
+    cluster_plots = {}
+    for c_idx in sorted(list(set(y))):
+        c_values = sorted([round(float(v), 4) for v, l in zip(sample_values, y) if l == c_idx], reverse=True)
+        cluster_plots[int(c_idx)] = c_values
+
+    return {
+        "available": True,
+        "average_score": round(avg_score, 4),
+        "total_evaluated": len(X),
+        "cluster_plots": cluster_plots
+    }

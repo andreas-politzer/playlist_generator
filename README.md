@@ -18,7 +18,7 @@ Playlist Generator turns a song library into a set of playlists using unsupervis
   - **t-SNE**: custom Canvas rendering (handles thousands of points smoothly), adjustable perplexity
   - **Dendrogram**: choice of linkage method and raw/scaled data, automatic truncation for large collections, colored branches
 - **Playlist Detail view**: a large, editable table per playlist — add or remove tracks (including hand-entered ones with no audio features), toggle any extra CSV columns as columns, add fully custom user-defined columns, an auto-saving free-text note per playlist, and PDF export (respects the currently visible columns)
-- **Quality Street (mockup)**: a dedicated module previewing the planned clustering-quality dashboard (see Vision, section 2) — currently static placeholder data, real backend calculation not yet implemented
+- **Quality Street**: a dedicated clustering-quality dashboard, fully backed by live calculations — Statistical Metrics (Silhouette Score, Calinski-Harabasz Index, Davies-Bouldin Index, Cluster Balance, Noise Ratio) for a Collection, Music-Specific Metrics (Tempo Dispersion, Energy Dispersion, Artist Diversity) for a Playlist, all computed dynamically from the current state (reflects edits made in the Playlist Detail view). Includes an interactive Silhouette Plot (per-song values, grouped and colored by cluster) opened from its own icon. Elbow Point and Harmonic Compatibility are shown as visible "not yet available" placeholders, reserved for the Pinball Wizard and future track-ordering support respectively.
 - **Fullscreen mode** for the canvas
 - Tile stacking order (click/drag brings a tile to front) works uniformly across all tiles, fixed and dynamic alike
 

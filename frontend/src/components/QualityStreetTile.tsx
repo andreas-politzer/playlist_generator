@@ -55,7 +55,6 @@ function ratingFor(metricKey: string, value: number): string {
     case 'silhouette_score':
       return value >= 0.5 ? 'Optimal' : value >= 0.25 ? 'Good' : 'Weak'
     case 'davies_bouldin_index':
-      // Pragmatic orientation only, not a universal threshold
       return value < 1.0 ? 'Optimal' : value <= 1.8 ? 'Good' : 'Moderate'
     case 'calinski_harabasz_index':
       return value >= 100 ? 'Optimal' : value >= 20 ? 'Good' : 'Weak'
@@ -104,13 +103,38 @@ const METRIC_LABELS: Record<string, string> = {
 
 const NO_RATING_METRICS = new Set(['calinski_harabasz_index', 'davies_bouldin_index'])
 
-function MetricRow({ metricKey, metric }: { metricKey: string; metric: MetricValue }) {
+function MetricRow({
+  metricKey,
+  metric,
+  generationId,
+  onOpenSilhouettePlot,
+}: {
+  metricKey: string
+  metric: MetricValue
+  generationId?: string
+  onOpenSilhouettePlot?: (generationId: string) => void
+}) {
   const hasRating = !NO_RATING_METRICS.has(metricKey)
   const rating = hasRating && metric.available && metric.value !== null ? ratingFor(metricKey, metric.value) : ''
   return (
     <div className="flex flex-col py-1 border-b border-white/5 last:border-0">
       <div className="flex items-center justify-between">
-        <span className="text-xs font-body text-white/80">{METRIC_LABELS[metricKey] ?? metricKey}</span>
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs font-body text-white/80">{METRIC_LABELS[metricKey] ?? metricKey}</span>
+          {metricKey === 'silhouette_score' && onOpenSilhouettePlot && (
+            <button
+              onClick={() => generationId && onOpenSilhouettePlot(generationId)}
+              className="text-white/40 hover:text-white/90 p-0.5 rounded transition-colors"
+              title="Visualize Silhouette Plot"
+            >
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="18" y1="20" x2="18" y2="10" />
+                <line x1="12" y1="20" x2="12" y2="4" />
+                <line x1="6" y1="20" x2="6" y2="14" />
+              </svg>
+            </button>
+          )}
+        </div>
         {metric.available ? (
           <div className="flex items-center gap-2">
             <span className="text-xs font-body text-white/90">{metric.value}</span>
@@ -152,6 +176,7 @@ export function QualityStreetTile({
   anchoredGeneration,
   onClearPlaylist,
   onClearGeneration,
+  onOpenSilhouettePlot,
 }: {
   startPosition: ModulePosition
   onDragEnd?: (bounds: DOMRect | undefined) => void
@@ -164,10 +189,12 @@ export function QualityStreetTile({
   anchoredGeneration: { generationId: string; label: string } | null
   onClearPlaylist: () => void
   onClearGeneration: () => void
+  onOpenSilhouettePlot?: (generationId: string) => void
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   const [measuredHeight, setMeasuredHeight] = useState<number | undefined>(undefined)
+  const generationId = anchoredGeneration?.generationId ?? anchoredPlaylist?.generationId
   const [generationQuality, setGenerationQuality] = useState<GenerationQuality | null>(null)
   const [playlistQuality, setPlaylistQuality] = useState<PlaylistQuality | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -193,34 +220,6 @@ export function QualityStreetTile({
       .then(setPlaylistQuality)
       .catch((err) => setError(err instanceof Error ? err.message : 'Unknown error'))
   }, [anchoredPlaylist])
-
-  useLayoutEffect(() => {
-    const element = contentRef.current
-    if (!element) return
-
-    const updateHeight = () => {
-      setMeasuredHeight(68 + element.scrollHeight + 20)
-    }
-
-    updateHeight()
-    const observer = new ResizeObserver(updateHeight)
-    observer.observe(element)
-    return () => observer.disconnect()
-  }, [])
-
-  useLayoutEffect(() => {
-    const element = contentRef.current
-    if (!element) return
-
-    const updateHeight = () => {
-      setMeasuredHeight(68 + element.scrollHeight + 20)
-    }
-
-    updateHeight()
-    const observer = new ResizeObserver(updateHeight)
-    observer.observe(element)
-    return () => observer.disconnect()
-  }, [])
 
   useLayoutEffect(() => {
     const element = contentRef.current
@@ -302,7 +301,13 @@ export function QualityStreetTile({
               Statistical Metrics · {generationQuality.songs_evaluated}/{generationQuality.songs_total} songs
             </span>
             {Object.entries(generationQuality.metrics).map(([key, metric]) => (
-              <MetricRow key={key} metricKey={key} metric={metric} />
+              <MetricRow
+                key={key}
+                metricKey={key}
+                metric={metric}
+                generationId={generationId}
+                onOpenSilhouettePlot={onOpenSilhouettePlot}
+              />
             ))}
             <PlaceholderRow label="Elbow Point" reason="Part of Pinball Wizard" />
           </div>
