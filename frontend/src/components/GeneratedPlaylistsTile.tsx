@@ -151,6 +151,8 @@ function useDropOnTarget(
   archiveRef: React.RefObject<HTMLDivElement | null>,
   chartsAnchorRef?: React.RefObject<HTMLDivElement | null>,
   onDroppedOnChartsAnchor?: () => void,
+  qualityAnchorRef?: React.RefObject<HTMLDivElement | null>,
+  onDroppedOnQualityAnchor?: () => void,
 ) {
   const [isWobbling, setIsWobbling] = useState(false)
   const didDragRef = useRef(false)
@@ -175,6 +177,7 @@ function useDropOnTarget(
     setTargetFeedback(trashRef, false)
     setTargetFeedback(archiveRef, false)
     if (chartsAnchorRef) setTargetFeedback(chartsAnchorRef, false)
+    if (qualityAnchorRef) setTargetFeedback(qualityAnchorRef, false)
   }
 
   const onGripPointerDown = (e: React.PointerEvent) => {
@@ -216,6 +219,7 @@ function useDropOnTarget(
     setTargetFeedback(trashRef, checkOverlap(bounds, trashRef))
     setTargetFeedback(archiveRef, checkOverlap(bounds, archiveRef))
     if (chartsAnchorRef) setTargetFeedback(chartsAnchorRef, checkOverlap(bounds, chartsAnchorRef))
+    if (qualityAnchorRef) setTargetFeedback(qualityAnchorRef, checkOverlap(bounds, qualityAnchorRef))
   }
 
     const onGripPointerUp = () => {
@@ -236,6 +240,9 @@ function useDropOnTarget(
       } else if (chartsAnchorRef && checkOverlap(bounds, chartsAnchorRef)) {
         debugLog('dropped on charts anchor')
         onDroppedOnChartsAnchor?.()
+      } else if (qualityAnchorRef && checkOverlap(bounds, qualityAnchorRef)) {
+        debugLog('dropped on quality anchor')
+        onDroppedOnQualityAnchor?.()
       }
     }
 
@@ -268,6 +275,8 @@ function GenerationRow({
   archiveRef,
   chartsGenerationAnchorRef,
   onAnchorGeneration,
+  qualityGenerationAnchorRef,
+  onAnchorQualityGeneration,
 }: {
   gen: GenerationSummary
   onOpen: () => void
@@ -279,6 +288,8 @@ function GenerationRow({
   archiveRef: React.RefObject<HTMLDivElement | null>
   chartsGenerationAnchorRef: React.RefObject<HTMLDivElement | null>
   onAnchorGeneration: (anchor: import('../core/types').AnchoredGeneration) => void
+  qualityGenerationAnchorRef: React.RefObject<HTMLDivElement | null>
+  onAnchorQualityGeneration: (anchor: import('../core/types').AnchoredGeneration) => void
 }) {
   const previewSize = { width: 180, height: 40 }
   const { isWobbling, previewPos, didDragRef, gripHandlers } = useDropOnTarget(
@@ -292,6 +303,8 @@ function GenerationRow({
       fetchGenerationFeatures(gen.id).then((features) =>
         onAnchorGeneration({ type: 'generation', generationId: gen.id, label: gen.name, features }),
       ),
+    qualityGenerationAnchorRef,
+    () => onAnchorQualityGeneration({ type: 'generation', generationId: gen.id, label: gen.name, features: [] }),
   )
 
   return (
@@ -339,6 +352,107 @@ function GenerationRow({
   )
 }
 
+function FlatPlaylistRow({
+  playlist,
+  onArchived,
+  onArchiveChanged,
+  trashRef,
+  archiveRef,
+  chartsPlaylistAnchorRef,
+  onAnchorPlaylist,
+  onContextMenu,
+  onOpenDetail,
+  qualityPlaylistAnchorRef,
+  onAnchorQualityPlaylist,
+}: {
+  playlist: PlaylistSummary
+  onArchived: () => void
+  onArchiveChanged: () => void
+  trashRef: React.RefObject<HTMLDivElement | null>
+  archiveRef: React.RefObject<HTMLDivElement | null>
+  chartsPlaylistAnchorRef: React.RefObject<HTMLDivElement | null>
+  onAnchorPlaylist: (anchor: import('../core/types').AnchoredPlaylist) => void
+  onContextMenu: (e: React.MouseEvent) => void
+  onOpenDetail: () => void
+  qualityPlaylistAnchorRef: React.RefObject<HTMLDivElement | null>
+  onAnchorQualityPlaylist: (anchor: import('../core/types').AnchoredPlaylist) => void
+}) {
+  const previewSize = { width: 200, height: 40 }
+  const { isWobbling, previewPos, didDragRef, gripHandlers } = useDropOnTarget(
+    () => trashPlaylist(playlist.playlist_id, playlist.generation_id).then(onArchived),
+    () => archivePlaylist(playlist.playlist_id, playlist.generation_id).then(() => { onArchived(); onArchiveChanged() }),
+    previewSize,
+    trashRef,
+    archiveRef,
+    chartsPlaylistAnchorRef,
+    () =>
+      fetchGenerationFeatures(playlist.generation_id).then((features) =>
+        onAnchorPlaylist({
+          type: 'playlist',
+          playlistId: playlist.playlist_id,
+          generationId: playlist.generation_id,
+          label: playlist.name,
+          features,
+        }),
+      ),
+    qualityPlaylistAnchorRef,
+    () =>
+      onAnchorQualityPlaylist({
+        type: 'playlist',
+        playlistId: playlist.playlist_id,
+        generationId: playlist.generation_id,
+        label: playlist.name,
+        features: [],
+      }),
+  )
+
+  return (
+    <>
+      <div
+        onPointerDown={gripHandlers.onGripPointerDown}
+        onPointerMove={gripHandlers.onGripPointerMove}
+        onPointerUp={gripHandlers.onGripPointerUp}
+        onDoubleClick={(e) => {
+          if (didDragRef.current) return
+          e.preventDefault()
+          onOpenDetail()
+        }}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          onContextMenu(e)
+        }}
+        style={{ opacity: previewPos ? 0.3 : 1 }}
+        className={`bg-white/5 hover:bg-white/10 rounded-lg px-2 py-1.5 cursor-grab active:cursor-grabbing select-none touch-none ${
+          isWobbling ? 'wobble' : ''
+        }`}
+      >
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs font-body text-white/90">{playlist.name}</span>
+          <button
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => { e.stopPropagation(); onOpenDetail() }}
+            className="text-white/40 hover:text-white/90 text-[10px]"
+            title="Open Detail View"
+          >
+            🔍
+          </button>
+        </div>
+        <span className="text-[10px] font-body text-white/50">
+          {playlist.song_count} songs · {playlist.generation_name}
+        </span>
+      </div>
+
+      {previewPos &&
+        createPortal(
+          <div className="fixed z-50 pointer-events-none" style={{ left: previewPos.x, top: previewPos.y }}>
+            <PreviewGhost width={previewSize.width} height={previewSize.height} label={playlist.name} />
+          </div>,
+          document.body,
+        )}
+    </>
+  )
+}
+
 function PlaylistRow({
   cluster,
   generationId,
@@ -352,6 +466,8 @@ function PlaylistRow({
   onAnchorPlaylist,
   onContextMenu,
   onOpenDetail,
+  qualityPlaylistAnchorRef,
+  onAnchorQualityPlaylist,
 }: {
   cluster: Cluster
   generationId: string
@@ -365,6 +481,8 @@ function PlaylistRow({
   onAnchorPlaylist: (anchor: import('../core/types').AnchoredPlaylist) => void
   onContextMenu: (e: React.MouseEvent) => void
   onOpenDetail: () => void
+  qualityPlaylistAnchorRef: React.RefObject<HTMLDivElement | null>
+  onAnchorQualityPlaylist: (anchor: import('../core/types').AnchoredPlaylist) => void
 }) {
 
   const previewSize = { width: 160, height: 36 }
@@ -385,6 +503,15 @@ function PlaylistRow({
           features,
         }),
       ),
+    qualityPlaylistAnchorRef,
+    () =>
+      onAnchorQualityPlaylist({
+        type: 'playlist',
+        playlistId: cluster.playlist_id,
+        generationId,
+        label: cluster.custom_name ?? `Playlist ${cluster.cluster_id + 1}`,
+        features: [],
+      }),
   )
 
   return (
@@ -468,6 +595,10 @@ export function GeneratedPlaylistsTile({
   onAnchorGeneration,
   onOpenPlaylistDetail,
   archiveRefreshKey,
+  qualityPlaylistAnchorRef,
+  qualityGenerationAnchorRef,
+  onAnchorQualityPlaylist,
+  onAnchorQualityGeneration,
 }: {
   startPosition: ModulePosition
   onDragEnd?: (bounds: DOMRect | undefined) => void
@@ -485,6 +616,10 @@ export function GeneratedPlaylistsTile({
   onAnchorGeneration: (anchor: import('../core/types').AnchoredGeneration) => void
   onOpenPlaylistDetail: (generationId: string, playlistId: string) => void
   archiveRefreshKey: number
+  qualityPlaylistAnchorRef: React.RefObject<HTMLDivElement | null>
+  qualityGenerationAnchorRef: React.RefObject<HTMLDivElement | null>
+  onAnchorQualityPlaylist: (anchor: import('../core/types').AnchoredPlaylist) => void
+  onAnchorQualityGeneration: (anchor: import('../core/types').AnchoredGeneration) => void
 }) {
 
   const [viewMode, setViewMode] = useState<'collections' | 'playlists'>('collections')
@@ -640,31 +775,25 @@ export function GeneratedPlaylistsTile({
             {allPlaylists !== null && allPlaylists.length === 0 && (
               <span className="text-xs font-body text-white/40">No playlists yet</span>
             )}
-             {allPlaylists?.map((playlist) => (
-              <div
+              {allPlaylists?.map((playlist) => (
+              <FlatPlaylistRow
                 key={playlist.playlist_id}
-                onDoubleClick={() => onOpenPlaylistDetail(playlist.generation_id, playlist.playlist_id)}
-                onContextMenu={(e) => {
-                  e.preventDefault()
-                  setPlaylistContextMenu({ x: e.clientX, y: e.clientY, playlistId: playlist.playlist_id, generationId: playlist.generation_id })
+                playlist={playlist}
+                onArchived={() => {
+                  if (allPlaylists !== null) loadAllPlaylists()
                 }}
-                className="bg-white/5 hover:bg-white/10 rounded-lg px-2 py-1.5 cursor-pointer"
-              >
-                <div className="flex items-center gap-1.5">
-                  <span className="text-xs font-body text-white/90">{playlist.name}</span>
-                  <button
-                    onPointerDown={(e) => e.stopPropagation()}
-                    onClick={() => onOpenPlaylistDetail(playlist.generation_id, playlist.playlist_id)}
-                    className="text-white/40 hover:text-white/90 text-[10px]"
-                    title="Open Detail View"
-                  >
-                    🔍
-                  </button>
-                </div>
-                <span className="text-[10px] font-body text-white/50">
-                  {playlist.song_count} songs · {playlist.generation_name}
-                </span>
-              </div>
+                onArchiveChanged={onArchiveChanged}
+                trashRef={trashRef}
+                archiveRef={archiveRef}
+                chartsPlaylistAnchorRef={chartsPlaylistAnchorRef}
+                onAnchorPlaylist={onAnchorPlaylist}
+                onContextMenu={(e) =>
+                  setPlaylistContextMenu({ x: e.clientX, y: e.clientY, playlistId: playlist.playlist_id, generationId: playlist.generation_id })
+                }
+                onOpenDetail={() => onOpenPlaylistDetail(playlist.generation_id, playlist.playlist_id)}
+                qualityPlaylistAnchorRef={qualityPlaylistAnchorRef}
+                onAnchorQualityPlaylist={onAnchorQualityPlaylist}
+              />
             ))}
           </div>
         )}
@@ -694,6 +823,8 @@ export function GeneratedPlaylistsTile({
                 archiveRef={archiveRef}
                 chartsGenerationAnchorRef={chartsGenerationAnchorRef}
                 onAnchorGeneration={onAnchorGeneration}
+                qualityGenerationAnchorRef={qualityGenerationAnchorRef}
+                onAnchorQualityGeneration={onAnchorQualityGeneration}
               />
             )})}
           </div>
@@ -733,6 +864,8 @@ export function GeneratedPlaylistsTile({
                     setPlaylistContextMenu({ x: e.clientX, y: e.clientY, playlistId: cluster.playlist_id, generationId: detail.id })
                   }
                   onOpenDetail={() => onOpenPlaylistDetail(detail.id, cluster.playlist_id)}
+                  qualityPlaylistAnchorRef={qualityPlaylistAnchorRef}
+                  onAnchorQualityPlaylist={onAnchorQualityPlaylist}
                 />
               ))}
             </div>

@@ -14,7 +14,7 @@ from sklearn.preprocessing import StandardScaler, MinMaxScaler, RobustScaler, Po
 from sklearn.cluster import KMeans, DBSCAN, HDBSCAN, AgglomerativeClustering
 from sklearn.decomposition import PCA, KernelPCA
 from sklearn.mixture import GaussianMixture
-from sklearn.metrics import silhouette_score
+from sklearn.metrics import silhouette_score, calinski_harabasz_score, davies_bouldin_score
 from pydantic import BaseModel
 from sklearn.manifold import TSNE
 from scipy.cluster.hierarchy import linkage, dendrogram as scipy_dendrogram
@@ -1562,3 +1562,147 @@ async def set_track_metadata(generation_id: str, playlist_id: str, track_id: str
     track.setdefault("metadata", {})[request.column] = request.value
     generation_file.write_text(json.dumps(data, indent=2))
     return {"status": "saved"}
+
+def compute_generation_quality(generation_id: str) -> dict:
+    generation_file = GENERATIONS_DIR / f"{generation_id}.json"
+    if not generation_file.exists():
+        raise HTTPException(status_code=404, detail="Generation not found.")
+
+    data = json.loads(generation_file.read_text())
+    clusters = data.get("clusters", [])
+    feature_names = data.get("used_audio_features", [])
+
+    all_points = []
+    all_labels = []
+    noise_count = data.get("noise_count", 0)
+    for cluster in clusters:
+        for track in cluster.get("tracks", []):
+            if "audio_features_scaled" not in track:
+                continue
+            all_points.append([track["audio_features_scaled"].get(f) or 0.0 for f in feature_names])
+            all_labels.append(cluster["cluster_id"])
+
+    songs_total = sum(len(c.get("tracks", [])) for c in clusters)
+    songs_evaluated = len(all_points)
+
+    def metric_result(value=None, reason=None):
+        if reason is not None:
+            return {"available": False, "value": None, "unavailable_reason": reason}
+        return {"available": True, "value": round(float(value), 4), "unavailable_reason": None}
+
+    unique_labels = set(all_labels)
+    if len(all_points) < 3 or len(unique_labels) < 2:
+        reason = "Not enough valid clusters after noise filtering"
+        silhouette = calinski_harabasz = davies_bouldin = metric_result(reason=reason)
+    else:
+        X = np.array(all_points)
+        labels = np.array(all_labels)
+
+        MAX_SAMPLE_SIZE = 6000
+        if len(X) > MAX_SAMPLE_SIZE:
+            rng = np.random.default_rng(42)
+            sample_idx = rng.choice(len(X), size=MAX_SAMPLE_SIZE, replace=False)
+            X_sample, labels_sample = X[sample_idx], labels[sample_idx]
+        else:
+            X_sample, labels_sample = X, labels
+
+        silhouette = metric_result(silhouette_score(X_sample, labels_sample))
+        calinski_harabasz = metric_result(calinski_harabasz_score(X_sample, labels_sample))
+        davies_bouldin = metric_result(davies_bouldin_score(X_sample, labels_sample))
+
+    playlist_sizes = [len(c.get("tracks", [])) for c in clusters]
+    if len(playlist_sizes) < 2 or sum(playlist_sizes) == 0:
+        cluster_balance = metric_result(reason="Not enough playlists to compute balance")
+    else:
+        mean_size = sum(playlist_sizes) / len(playlist_sizes)
+        variance = sum((s - mean_size) ** 2 for s in playlist_sizes) / len(playlist_sizes)
+        std_dev = variance ** 0.5
+        coefficient_of_variation = std_dev / mean_size if mean_size > 0 else 0
+        balance_score = max(0.0, 1.0 - coefficient_of_variation)
+        cluster_balance = metric_result(balance_score)
+
+    noise_ratio = metric_result(round(noise_count / songs_total, 4)) if songs_total > 0 else metric_result(reason="No songs in collection")
+
+    return {
+        "target": "generation",
+        "generation_id": generation_id,
+        "algorithm": data.get("algorithm"),
+        "scaler": data.get("scaler"),
+        "songs_total": songs_total,
+        "songs_evaluated": songs_evaluated,
+        "playlist_count": len(clusters),
+        "noise_count": noise_count,
+        "metrics": {
+            "silhouette_score": silhouette,
+            "calinski_harabasz_index": calinski_harabasz,
+            "davies_bouldin_index": davies_bouldin,
+            "cluster_balance": cluster_balance,
+            "noise_ratio": noise_ratio,
+        },
+    }
+
+
+@app.get("/generations/{generation_id}/quality")
+async def get_generation_quality(generation_id: str):
+    return compute_generation_quality(generation_id)
+
+def compute_playlist_quality(generation_id: str, playlist_id: str) -> dict:
+    generation_file = GENERATIONS_DIR / f"{generation_id}.json"
+    if not generation_file.exists():
+        raise HTTPException(status_code=404, detail="Generation not found.")
+
+    data = json.loads(generation_file.read_text())
+    cluster = next((c for c in data.get("clusters", []) if c.get("playlist_id") == playlist_id), None)
+    if cluster is None:
+        raise HTTPException(status_code=404, detail="Playlist not found.")
+
+    tracks = cluster.get("tracks", [])
+    songs_total = len(tracks)
+
+    def metric_result(value=None, reason=None):
+        if reason is not None:
+            return {"available": False, "value": None, "unavailable_reason": reason}
+        return {"available": True, "value": round(float(value), 4), "unavailable_reason": None}
+
+    def dispersion(feature_key):
+        values = [
+            t["audio_features"].get(feature_key)
+            for t in tracks
+            if "audio_features" in t and t["audio_features"].get(feature_key) is not None
+        ]
+        if len(values) < 2:
+            return metric_result(reason=f"Not enough tracks with {feature_key} data"), len(values)
+        mean_val = sum(values) / len(values)
+        variance = sum((v - mean_val) ** 2 for v in values) / len(values)
+        return metric_result(variance ** 0.5), len(values)
+
+    tempo_dispersion, tempo_evaluated = dispersion("tempo")
+    energy_dispersion, energy_evaluated = dispersion("energy")
+
+    artists = [t.get("artist") or t.get("Artist") or t.get("artist_name") for t in tracks]
+    valid_artists = [a for a in artists if a]
+    if len(valid_artists) == 0:
+        artist_diversity = metric_result(reason="No artist data available")
+    else:
+        unique_artists = len(set(valid_artists))
+        artist_diversity = metric_result(unique_artists / len(valid_artists))
+
+    return {
+        "target": "playlist",
+        "generation_id": generation_id,
+        "playlist_id": playlist_id,
+        "name": cluster.get("custom_name") or f"Playlist {cluster['cluster_id'] + 1}",
+        "songs_total": songs_total,
+        "songs_evaluated_tempo": tempo_evaluated,
+        "songs_evaluated_energy": energy_evaluated,
+        "metrics": {
+            "tempo_dispersion": tempo_dispersion,
+            "energy_dispersion": energy_dispersion,
+            "artist_diversity_ratio": artist_diversity,
+        },
+    }
+
+
+@app.get("/generations/{generation_id}/playlists/{playlist_id}/quality")
+async def get_playlist_quality(generation_id: str, playlist_id: str):
+    return compute_playlist_quality(generation_id, playlist_id)

@@ -207,6 +207,10 @@ function App() {
           onOpenPlaylistDetail={(generationId, playlistId) =>
             addChartTile({ x: 500, y: 150 }, undefined, { type: 'playlist', generationId, playlistId }, {}, 'playlist-detail')
           }
+          qualityPlaylistAnchorRef={qualityPlaylistAnchorRef}
+          qualityGenerationAnchorRef={qualityGenerationAnchorRef}
+          onAnchorQualityPlaylist={setQualityAnchoredPlaylist}
+          onAnchorQualityGeneration={setQualityAnchoredGeneration}
         />
       )}
       
@@ -245,7 +249,7 @@ function App() {
         />
       )}
 
-      {qualityStreetLocation.place === 'canvas' && (
+       {qualityStreetLocation.place === 'canvas' && (
          <QualityStreetTile
           startPosition={qualityStreetLocation.position}
           onDragEnd={(bounds) => {
@@ -254,16 +258,12 @@ function App() {
           onDragStart={() => bringToFront('qualityStreet')}
           onDragMove={handleModuleDragMove}
           zIndex={getZIndex('qualityStreet')}
-          playlistAnchorRef={chartsPlaylistAnchorRef}
-          generationAnchorRef={chartsGenerationAnchorRef}
-          anchoredPlaylistLabel={anchoredPlaylist?.label ?? null}
-          anchoredGenerationLabel={anchoredGeneration?.label ?? null}
-          onClearPlaylist={() => setAnchoredPlaylist(null)}
-          onClearGeneration={() => setAnchoredGeneration(null)}
-          onGenerate={(target) => {
-            const label = target === 'playlist' ? anchoredPlaylist?.label : anchoredGeneration?.label
-            addChartTile({ x: 700, y: 200 }, undefined, target === 'playlist' ? anchoredPlaylist! : anchoredGeneration!, { qualityLabel: label, qualityTarget: target } as any, 'quality-result' as any)
-          }}
+          playlistAnchorRef={qualityPlaylistAnchorRef}
+          generationAnchorRef={qualityGenerationAnchorRef}
+          anchoredPlaylist={qualityAnchoredPlaylist}
+          anchoredGeneration={qualityAnchoredGeneration}
+          onClearPlaylist={() => setQualityAnchoredPlaylist(null)}
+          onClearGeneration={() => setQualityAnchoredGeneration(null)}
         />
       )}
 
