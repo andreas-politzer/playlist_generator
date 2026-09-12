@@ -11,6 +11,7 @@ const MODULE_LABELS: Record<ModuleId, string> = {
     generatedPlaylists: 'Music Library',
   archive: 'Archive',
   visualizations: 'Charts',
+  qualityStreet: 'Quality Street',
 }
 
 const GAP = 12

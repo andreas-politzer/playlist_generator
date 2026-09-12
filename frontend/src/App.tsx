@@ -6,6 +6,8 @@ import { GenerateTile } from './components/GenerateTile'
 import { GeneratedPlaylistsTile } from './components/GeneratedPlaylistsTile'
 import { ArchiveTile } from './components/ArchiveTile'
 import { VisualizationsTile } from './components/VisualizationsTile'
+import { QualityStreetTile } from './components/QualityStreetTile'
+import { QualityResultTile } from './components/QualityResultTile'
 import { ChartTile } from './components/ChartTile'
 import { PlaylistDetailTile } from './components/PlaylistDetailTile'
 import { useVisualizationTiles } from './core/visualizationTiles'
@@ -23,8 +25,12 @@ function App() {
   const archiveRef = useRef<HTMLDivElement>(null)
   const chartsPlaylistAnchorRef = useRef<HTMLDivElement>(null)
   const chartsGenerationAnchorRef = useRef<HTMLDivElement>(null)
+  const qualityPlaylistAnchorRef = useRef<HTMLDivElement>(null)
+  const qualityGenerationAnchorRef = useRef<HTMLDivElement>(null)
   const [anchoredPlaylist, setAnchoredPlaylist] = useState<AnchoredPlaylist | null>(null)
   const [anchoredGeneration, setAnchoredGeneration] = useState<AnchoredGeneration | null>(null)
+  const [qualityAnchoredPlaylist, setQualityAnchoredPlaylist] = useState<AnchoredPlaylist | null>(null)
+  const [qualityAnchoredGeneration, setQualityAnchoredGeneration] = useState<AnchoredGeneration | null>(null)
   const { bringToFront, getZIndex } = useZIndexManager()
   const { tiles: chartTiles, addTile: addChartTile, removeTile: removeChartTile, bringTileToFront: bringChartTileToFront } = useVisualizationTiles({ bringToFront })
 
@@ -72,6 +78,7 @@ function App() {
   const generatedLocation = locations.generatedPlaylists
   const archiveLocation = locations.archive
   const visualizationsLocation = locations.visualizations
+  const qualityStreetLocation = locations.qualityStreet
 
   const checkRackOverlap = (bounds: DOMRect | undefined) => {
     const rackBounds = rackRef.current?.getBoundingClientRect()
@@ -190,6 +197,7 @@ function App() {
           generations={generations}
           onGenerationsChanged={loadGenerations}
           onArchiveChanged={() => setArchiveRefreshKey((k) => k + 1)}
+          archiveRefreshKey={archiveRefreshKey}
           trashRef={trashRef}
           archiveRef={archiveRef}
           chartsPlaylistAnchorRef={chartsPlaylistAnchorRef}
@@ -212,7 +220,7 @@ function App() {
           onDragMove={handleModuleDragMove}
           zIndex={getZIndex('archive')}
           refreshKey={archiveRefreshKey}
-          onItemUnarchived={loadGenerations} 
+          onItemUnarchived={() => { loadGenerations(); setArchiveRefreshKey((k) => k + 1) }} 
           containerRef={archiveRef}
         />
       )}
@@ -237,6 +245,28 @@ function App() {
         />
       )}
 
+      {qualityStreetLocation.place === 'canvas' && (
+         <QualityStreetTile
+          startPosition={qualityStreetLocation.position}
+          onDragEnd={(bounds) => {
+            if (checkRackOverlap(bounds)) moveToRack('qualityStreet')
+          }}
+          onDragStart={() => bringToFront('qualityStreet')}
+          onDragMove={handleModuleDragMove}
+          zIndex={getZIndex('qualityStreet')}
+          playlistAnchorRef={chartsPlaylistAnchorRef}
+          generationAnchorRef={chartsGenerationAnchorRef}
+          anchoredPlaylistLabel={anchoredPlaylist?.label ?? null}
+          anchoredGenerationLabel={anchoredGeneration?.label ?? null}
+          onClearPlaylist={() => setAnchoredPlaylist(null)}
+          onClearGeneration={() => setAnchoredGeneration(null)}
+          onGenerate={(target) => {
+            const label = target === 'playlist' ? anchoredPlaylist?.label : anchoredGeneration?.label
+            addChartTile({ x: 700, y: 200 }, undefined, target === 'playlist' ? anchoredPlaylist! : anchoredGeneration!, { qualityLabel: label, qualityTarget: target } as any, 'quality-result' as any)
+          }}
+        />
+      )}
+
        <RackCard
         locations={locations}
         onPullOut={(id, position) => moveToCanvas(id, position)}
@@ -245,7 +275,18 @@ function App() {
       />
 
       {chartTiles.map((tile) =>
-        tile.kind === 'playlist-detail' && tile.source.type === 'playlist' ? (
+        (tile.kind as any) === 'quality-result' ? (
+          <QualityResultTile
+            key={tile.id}
+            id={tile.id}
+            position={tile.position}
+            target={tile.source.type === 'playlist' ? 'playlist' : 'generation'}
+            label={(tile.config as any).qualityLabel ?? 'Quality Result'}
+            zIndex={getZIndex(tile.id)}
+            onClose={removeChartTile}
+            onFocus={bringChartTileToFront}
+          />
+        ) : tile.kind === 'playlist-detail' && tile.source.type === 'playlist' ? (
           <PlaylistDetailTile
             key={tile.id}
             id={tile.id}

@@ -7,10 +7,12 @@ export function RenameDialog({
   onCancel,
 }: {
   currentName: string
-  onSave: (newName: string) => void
+  onSave: (newName: string) => Promise<void>
   onCancel: () => void
 }) {
   const [value, setValue] = useState(currentName)
+  const [error, setError] = useState<string | null>(null)
+  const [isSaving, setIsSaving] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -18,10 +20,19 @@ export function RenameDialog({
     inputRef.current?.select()
   }, [])
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     const trimmed = value.trim()
-    if (trimmed) onSave(trimmed)
+    if (!trimmed) return
+    setIsSaving(true)
+    setError(null)
+    try {
+      await onSave(trimmed)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to rename.')
+    } finally {
+      setIsSaving(false)
+    }
   }
 
   return createPortal(
@@ -46,6 +57,7 @@ export function RenameDialog({
           }}
           className="bg-white/10 border border-white/30 rounded-lg px-2 py-1.5 text-sm text-white font-body focus:outline-none focus:border-white/70"
         />
+        {error && <span className="text-xs font-body text-red-400">{error}</span>}
         <div className="flex gap-2 justify-end">
           <button
             type="button"
@@ -56,9 +68,10 @@ export function RenameDialog({
           </button>
           <button
             type="submit"
-            className="rounded-md border border-white/40 bg-white/10 px-3 py-1 text-xs font-body text-white/90 hover:border-white/70"
+            disabled={isSaving}
+            className="rounded-md border border-white/40 bg-white/10 px-3 py-1 text-xs font-body text-white/90 hover:border-white/70 disabled:opacity-50"
           >
-            Save
+            {isSaving ? 'Saving...' : 'Save'}
           </button>
         </div>
       </form>

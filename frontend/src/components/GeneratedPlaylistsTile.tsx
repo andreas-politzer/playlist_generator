@@ -52,6 +52,22 @@ async function fetchGenerationDetail(id: string): Promise<GenerationDetail> {
   return response.json()
 }
 
+interface PlaylistSummary {
+  playlist_id: string
+  generation_id: string
+  generation_name: string
+  name: string
+  cluster_id: number
+  song_count: number
+  duration_ms: number | null
+}
+
+async function fetchPlaylistsSummary(): Promise<PlaylistSummary[]> {
+  const response = await fetch('http://localhost:8001/playlists/summary')
+  if (!response.ok) throw new Error('Failed to fetch playlists summary')
+  return response.json()
+}
+
 async function deleteGeneration(id: string): Promise<void> {
   await fetch(`http://localhost:8001/generations/${id}`, { method: 'DELETE' })
 }
@@ -95,11 +111,15 @@ async function renameGeneration(id: string, name: string): Promise<void> {
 }
 
 async function renamePlaylist(generationId: string, playlistId: string, name: string): Promise<void> {
-  await fetch(`http://localhost:8001/generations/${generationId}/playlists/${playlistId}`, {
+  const response = await fetch(`http://localhost:8001/generations/${generationId}/playlists/${playlistId}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name }),
   })
+  if (!response.ok) {
+    const body = await response.json().catch(() => null)
+    throw new Error(body?.detail ?? 'Failed to rename playlist.')
+  }
 }
 
 function formatDuration(ms: number | null): string {
@@ -447,6 +467,7 @@ export function GeneratedPlaylistsTile({
   onAnchorPlaylist,
   onAnchorGeneration,
   onOpenPlaylistDetail,
+  archiveRefreshKey,
 }: {
   startPosition: ModulePosition
   onDragEnd?: (bounds: DOMRect | undefined) => void
@@ -463,8 +484,13 @@ export function GeneratedPlaylistsTile({
   onAnchorPlaylist: (anchor: import('../core/types').AnchoredPlaylist) => void
   onAnchorGeneration: (anchor: import('../core/types').AnchoredGeneration) => void
   onOpenPlaylistDetail: (generationId: string, playlistId: string) => void
+  archiveRefreshKey: number
 }) {
 
+  const [viewMode, setViewMode] = useState<'collections' | 'playlists'>('collections')
+  const [hiddenGenerationIds, setHiddenGenerationIds] = useState<Set<string>>(new Set())
+  const [allPlaylists, setAllPlaylists] = useState<PlaylistSummary[] | null>(null)
+  const renameRequestIds = useRef<Record<string, number>>({})
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [detail, setDetail] = useState<GenerationDetail | null>(null)
   const [expandedCluster, setExpandedCluster] = useState<number | null>(null)
@@ -473,9 +499,9 @@ export function GeneratedPlaylistsTile({
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null)
   const [infoGenerationId, setInfoGenerationId] = useState<string | null>(null)
   const [infoData, setInfoData] = useState<GenerationDetail | null>(null)
-  const [playlistContextMenu, setPlaylistContextMenu] = useState<{ x: number; y: number; playlistId: string } | null>(null)
-  const [renamingPlaylistId, setRenamingPlaylistId] = useState<string | null>(null)
-  const [confirmingDeletePlaylistId, setConfirmingDeletePlaylistId] = useState<string | null>(null)
+  const [playlistContextMenu, setPlaylistContextMenu] = useState<{ x: number; y: number; playlistId: string; generationId: string } | null>(null)
+  const [renamingPlaylist, setRenamingPlaylist] = useState<{ playlistId: string; generationId: string; currentName: string } | null>(null)
+  const [confirmingDeletePlaylist, setConfirmingDeletePlaylist] = useState<{ playlistId: string; generationId: string } | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
 
   const openDetail = async (id: string) => {
@@ -483,6 +509,15 @@ export function GeneratedPlaylistsTile({
     const data = await fetchGenerationDetail(id)
     setDetail(data)
   }
+
+  const loadAllPlaylists = async () => {
+    const data = await fetchPlaylistsSummary()
+    setAllPlaylists(data)
+  }
+
+  useEffect(() => {
+    if (allPlaylists !== null) loadAllPlaylists()
+  }, [archiveRefreshKey])
 
   useEffect(() => {
     if (!selectedId) return
@@ -513,12 +548,39 @@ export function GeneratedPlaylistsTile({
     }
   }
 
-  const handleRenamePlaylist = async (playlistId: string, newName: string) => {
-    if (!detail) return
-    await renamePlaylist(detail.id, playlistId, newName)
-    setRenamingPlaylistId(null)
-    const updated = await fetchGenerationDetail(detail.id)
-    setDetail(updated)
+  const handleRenamePlaylist = async (playlistId: string, generationId: string, newName: string) => {
+    const requestId = (renameRequestIds.current[playlistId] ?? 0) + 1
+    renameRequestIds.current[playlistId] = requestId
+
+    const previousSummary = allPlaylists?.find((p) => p.playlist_id === playlistId)
+    const previousCluster = detail?.clusters.find((c) => c.playlist_id === playlistId)
+
+    if (allPlaylists !== null) {
+      setAllPlaylists((prev) => prev!.map((p) => (p.playlist_id === playlistId ? { ...p, name: newName } : p)))
+    }
+    if (detail && detail.id === generationId) {
+      setDetail({
+        ...detail,
+        clusters: detail.clusters.map((c) => (c.playlist_id === playlistId ? { ...c, custom_name: newName } : c)),
+      })
+    }
+
+    try {
+      await renamePlaylist(generationId, playlistId, newName)
+    } catch (err) {
+      if (renameRequestIds.current[playlistId] !== requestId) return
+      if (allPlaylists !== null && previousSummary) {
+        setAllPlaylists((prev) => prev!.map((p) => (p.playlist_id === playlistId ? previousSummary : p)))
+      }
+      if (detail && detail.id === generationId && previousCluster) {
+        setDetail((prevDetail) =>
+          prevDetail
+            ? { ...prevDetail, clusters: prevDetail.clusters.map((c) => (c.playlist_id === playlistId ? previousCluster : c)) }
+            : prevDetail,
+        )
+      }
+      throw err
+    }
   }
 
   const openInfo = async (generationId: string) => {
@@ -547,7 +609,67 @@ export function GeneratedPlaylistsTile({
       containerRef={containerRef}
     >
       <div className="px-6 pb-6 flex-1 flex flex-col overflow-hidden">
-        {!selectedId && (
+        <div className="shrink-0 flex gap-3 mb-2">
+          <button
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => { setViewMode('collections'); setSelectedId(null) }}
+            className={`text-[10px] font-body uppercase tracking-widest ${
+              viewMode === 'collections' ? 'text-white/90' : 'text-white/40 hover:text-white/70'
+            }`}
+          >
+            Collections
+          </button>
+           <button
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => {
+              setViewMode('playlists')
+              setSelectedId(null)
+              if (allPlaylists === null) loadAllPlaylists()
+            }}
+            className={`text-[10px] font-body uppercase tracking-widest ${
+              viewMode === 'playlists' ? 'text-white/90' : 'text-white/40 hover:text-white/70'
+            }`}
+          >
+            Playlists
+          </button>
+        </div>
+
+        {viewMode === 'playlists' && (
+          <div className="flex-1 overflow-y-auto space-y-2">
+            {allPlaylists === null && <span className="text-xs font-body text-white/40">Loading...</span>}
+            {allPlaylists !== null && allPlaylists.length === 0 && (
+              <span className="text-xs font-body text-white/40">No playlists yet</span>
+            )}
+             {allPlaylists?.map((playlist) => (
+              <div
+                key={playlist.playlist_id}
+                onDoubleClick={() => onOpenPlaylistDetail(playlist.generation_id, playlist.playlist_id)}
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  setPlaylistContextMenu({ x: e.clientX, y: e.clientY, playlistId: playlist.playlist_id, generationId: playlist.generation_id })
+                }}
+                className="bg-white/5 hover:bg-white/10 rounded-lg px-2 py-1.5 cursor-pointer"
+              >
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs font-body text-white/90">{playlist.name}</span>
+                  <button
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={() => onOpenPlaylistDetail(playlist.generation_id, playlist.playlist_id)}
+                    className="text-white/40 hover:text-white/90 text-[10px]"
+                    title="Open Detail View"
+                  >
+                    🔍
+                  </button>
+                </div>
+                <span className="text-[10px] font-body text-white/50">
+                  {playlist.song_count} songs · {playlist.generation_name}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {viewMode === 'collections' && !selectedId && (
           <div className="flex-1 overflow-y-auto space-y-2">
             <span className="shrink-0 text-[10px] font-body text-white/50 uppercase tracking-widest">
               Collections
@@ -556,14 +678,17 @@ export function GeneratedPlaylistsTile({
             {generations.length === 0 && (
               <span className="text-xs font-body text-white/40">No collections yet</span>
             )}
-            {generations.map((gen) => { debugLog(`mapping gen ${gen.id.slice(0,8)}`); return (
+                {generations.filter((gen) => !hiddenGenerationIds.has(gen.id)).map((gen) => { debugLog(`mapping gen ${gen.id.slice(0,8)}`); return (
                 <GenerationRow
                 key={gen.id}
                 gen={gen}
                 onOpen={() => openDetail(gen.id)}
                 onContextMenu={(e) => openContextMenu(e, gen.id)}
                 onDeleted={() => handleGenerationDeleted(gen.id)}
-                onArchived={onGenerationsChanged}
+                onArchived={() => {
+                  setHiddenGenerationIds((prev) => new Set(prev).add(gen.id))
+                  onGenerationsChanged()
+                }}
                 onArchiveChanged={onArchiveChanged}
                 trashRef={trashRef}
                 archiveRef={archiveRef}
@@ -605,7 +730,7 @@ export function GeneratedPlaylistsTile({
                   chartsPlaylistAnchorRef={chartsPlaylistAnchorRef}
                   onAnchorPlaylist={onAnchorPlaylist}
                   onContextMenu={(e) =>
-                    setPlaylistContextMenu({ x: e.clientX, y: e.clientY, playlistId: cluster.playlist_id })
+                    setPlaylistContextMenu({ x: e.clientX, y: e.clientY, playlistId: cluster.playlist_id, generationId: detail.id })
                   }
                   onOpenDetail={() => onOpenPlaylistDetail(detail.id, cluster.playlist_id)}
                 />
@@ -633,52 +758,124 @@ export function GeneratedPlaylistsTile({
         />
       )}
 
-      {playlistContextMenu && (
+       {playlistContextMenu && (
         <ContextMenu
           x={playlistContextMenu.x}
           y={playlistContextMenu.y}
           onClose={() => setPlaylistContextMenu(null)}
           items={[
-            { label: 'Rename', onSelect: () => setRenamingPlaylistId(playlistContextMenu.playlistId) },
+            {
+              label: 'Open',
+              onSelect: () => onOpenPlaylistDetail(playlistContextMenu.generationId, playlistContextMenu.playlistId),
+            },
+            {
+              label: 'Rename',
+              onSelect: () => {
+                const fromSummary = allPlaylists?.find((p) => p.playlist_id === playlistContextMenu.playlistId)
+                const fromDetail = detail?.clusters.find((c) => c.playlist_id === playlistContextMenu.playlistId)
+                const currentName =
+                  fromSummary?.name ??
+                  fromDetail?.custom_name ??
+                  `Playlist ${(fromDetail?.cluster_id ?? 0) + 1}`
+                setRenamingPlaylist({
+                  playlistId: playlistContextMenu.playlistId,
+                  generationId: playlistContextMenu.generationId,
+                  currentName,
+                })
+              },
+            },
+            {
+              label: 'Move to Archive',
+              onSelect: () => {
+                const { playlistId, generationId } = playlistContextMenu
+                const previousSummary = allPlaylists?.find((p) => p.playlist_id === playlistId)
+                const previousCluster = detail?.clusters.find((c) => c.playlist_id === playlistId)
+
+                if (allPlaylists !== null) {
+                  setAllPlaylists((prev) => prev!.filter((p) => p.playlist_id !== playlistId))
+                }
+                if (detail && detail.id === generationId) {
+                  setDetail({ ...detail, clusters: detail.clusters.filter((c) => c.playlist_id !== playlistId) })
+                }
+
+                archivePlaylist(playlistId, generationId)
+                  .then(() => onArchiveChanged())
+                  .catch(() => {
+                    if (allPlaylists !== null && previousSummary) {
+                      setAllPlaylists((prev) => [...prev!, previousSummary])
+                    }
+                    if (detail && detail.id === generationId && previousCluster) {
+                      setDetail((prevDetail) =>
+                        prevDetail ? { ...prevDetail, clusters: [...prevDetail.clusters, previousCluster] } : prevDetail,
+                      )
+                    }
+                  })
+              },
+            },
             {
               label: 'Move to Trash',
               destructive: true,
-              onSelect: () => setConfirmingDeletePlaylistId(playlistContextMenu.playlistId),
+              onSelect: () =>
+                setConfirmingDeletePlaylist({
+                  playlistId: playlistContextMenu.playlistId,
+                  generationId: playlistContextMenu.generationId,
+                }),
             },
           ]}
         />
       )}
 
-      {renamingPlaylistId && detail && (
+       {renamingPlaylist && (
         <RenameDialog
-          currentName={
-            detail.clusters.find((c) => c.playlist_id === renamingPlaylistId)?.custom_name ??
-            `Playlist ${(detail.clusters.find((c) => c.playlist_id === renamingPlaylistId)?.cluster_id ?? 0) + 1}`
-          }
-          onSave={(newName) => handleRenamePlaylist(renamingPlaylistId, newName)}
-          onCancel={() => setRenamingPlaylistId(null)}
+          currentName={renamingPlaylist.currentName}
+          onSave={async (newName) => {
+            await handleRenamePlaylist(renamingPlaylist.playlistId, renamingPlaylist.generationId, newName)
+            setRenamingPlaylist(null)
+          }}
+          onCancel={() => setRenamingPlaylist(null)}
         />
       )}
 
-      {confirmingDeletePlaylistId && detail && (
+         {confirmingDeletePlaylist && (
            <ConfirmDialog
           message="Move this playlist to Trash?"
           onConfirm={() => {
-            trashPlaylist(confirmingDeletePlaylistId, detail.id).then(async () => {
-              const updated = await fetchGenerationDetail(detail.id)
-              setDetail(updated)
-              onGenerationsChanged()
-            })
-            setConfirmingDeletePlaylistId(null)
+            const { playlistId, generationId } = confirmingDeletePlaylist
+            const previousSummary = allPlaylists?.find((p) => p.playlist_id === playlistId)
+            const previousCluster = detail?.clusters.find((c) => c.playlist_id === playlistId)
+
+            if (allPlaylists !== null) {
+              setAllPlaylists((prev) => prev!.filter((p) => p.playlist_id !== playlistId))
+            }
+            if (detail && detail.id === generationId) {
+              setDetail({ ...detail, clusters: detail.clusters.filter((c) => c.playlist_id !== playlistId) })
+            }
+
+            trashPlaylist(playlistId, generationId)
+              .then(() => onGenerationsChanged())
+              .catch(() => {
+                if (allPlaylists !== null && previousSummary) {
+                  setAllPlaylists((prev) => [...prev!, previousSummary])
+                }
+                if (detail && detail.id === generationId && previousCluster) {
+                  setDetail((prevDetail) =>
+                    prevDetail ? { ...prevDetail, clusters: [...prevDetail.clusters, previousCluster] } : prevDetail,
+                  )
+                }
+              })
+            setConfirmingDeletePlaylist(null)
           }}
-          onCancel={() => setConfirmingDeletePlaylistId(null)}
+          onCancel={() => setConfirmingDeletePlaylist(null)}
         />
       )}
 
       {renamingId && (
         <RenameDialog
           currentName={generations.find((g) => g.id === renamingId)?.name ?? ''}
-          onSave={(newName) => handleRename(renamingId, newName)}
+          onSave={async (newName) => {
+            await handleRename(renamingId, newName)
+            setRenamingId(null)
+          }}
           onCancel={() => setRenamingId(null)}
         />
       )}

@@ -48,6 +48,24 @@ async function addTrack(
   if (!response.ok) throw new Error('Failed to add track.')
 }
 
+async function setTrackMetadata(
+  generationId: string,
+  playlistId: string,
+  trackId: string,
+  column: string,
+  value: string,
+): Promise<void> {
+  const response = await fetch(
+    `http://localhost:8001/generations/${generationId}/playlists/${playlistId}/tracks/${trackId}/metadata`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ column, value }),
+    },
+  )
+  if (!response.ok) throw new Error('Failed to save value.')
+}
+
 async function updateNote(generationId: string, playlistId: string, note: string): Promise<void> {
   const response = await fetch(`http://localhost:8001/generations/${generationId}/playlists/${playlistId}/note`, {
     method: 'POST',
@@ -90,6 +108,10 @@ export function PlaylistDetailTile({
   const [newTrackName, setNewTrackName] = useState('')
   const [newTrackArtist, setNewTrackArtist] = useState('')
   const [confirmingRemoveTrackId, setConfirmingRemoveTrackId] = useState<string | null>(null)
+  const [showNewColumnForm, setShowNewColumnForm] = useState(false)
+  const [newColumnName, setNewColumnName] = useState('')
+  const [editingCell, setEditingCell] = useState<{ trackIndex: number; column: string } | null>(null)
+  const [editingValue, setEditingValue] = useState('')
   const [noteValue, setNoteValue] = useState('')
   const [noteSaved, setNoteSaved] = useState(true)
   const noteSaveTimeout = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -103,11 +125,14 @@ export function PlaylistDetailTile({
     }, 800)
   }
 
-   const reload = () => {
+  const reload = () => {
     fetchPlaylistDetail(generationId, playlistId)
       .then((result) => {
-        setData(result)
-        setVisibleColumns(new Set(result.metadata_keys))
+        setData((prev) => {
+          const mergedKeys = Array.from(new Set([...(prev?.metadata_keys ?? []), ...result.metadata_keys]))
+          return { ...result, metadata_keys: mergedKeys }
+        })
+        setVisibleColumns((prev) => new Set([...Array.from(prev), ...result.metadata_keys]))
         setNoteValue(result.note)
       })
       .catch((err) => setError(err instanceof Error ? err.message : 'Unknown error'))
@@ -121,6 +146,30 @@ export function PlaylistDetailTile({
     await removeTrack(generationId, playlistId, trackId)
     setConfirmingRemoveTrackId(null)
     reload()
+  }
+
+  const handleSaveCell = async (trackIndex: number, column: string, value: string) => {
+    if (!data || !data.tracks[trackIndex]) return
+    const targetTrack = data.tracks[trackIndex]
+    const trackIdentifier = targetTrack.track_id || targetTrack.name
+
+    setData((prev) => {
+      if (!prev) return prev
+      const nextTracks = [...prev.tracks]
+      nextTracks[trackIndex] = {
+        ...nextTracks[trackIndex],
+        metadata: {
+          ...nextTracks[trackIndex].metadata,
+          [column]: value,
+        },
+      }
+      return { ...prev, tracks: nextTracks }
+    })
+    setEditingCell(null)
+
+    if (trackIdentifier) {
+      await setTrackMetadata(generationId, playlistId, trackIdentifier, column, value).catch(() => reload())
+    }
   }
 
   const handleAdd = async () => {
@@ -174,30 +223,79 @@ export function PlaylistDetailTile({
               </div>
             )}
 
-            <div className="flex-1 overflow-y-auto">
-              <table className="w-full text-xs font-body text-white/90">
+            <div className="flex-1 overflow-x-auto overflow-y-auto max-w-full">
+              <table className="min-w-full w-max text-xs font-body text-white/90">
                 <thead>
-                  <tr className="text-white/50 text-left text-[10px] uppercase tracking-widest">
-                    <th className="pb-1 pr-2">#</th>
-                    <th className="pb-1 pr-2">Track</th>
-                    <th className="pb-1 pr-2">Artist</th>
-                    <th className="pb-1 pr-2">Dur.</th>
-                    {data.metadata_keys.filter((k) => visibleColumns.has(k)).map((key) => (
-                      <th key={key} className="pb-1 pr-2">{key}</th>
-                    ))}
+                  <tr className="text-white/50 text-left text-[10px] uppercase tracking-widest border-b border-white/10">
+                    <th className="pb-1 pr-2 whitespace-nowrap">#</th>
+                    <th className="pb-1 pr-2 whitespace-nowrap">Track</th>
+                    <th className="pb-1 pr-2 whitespace-nowrap">Artist</th>
+                    <th className="pb-1 pr-2 whitespace-nowrap">Dur.</th>
+                    {data.metadata_keys
+                      .filter((k) => visibleColumns.has(k))
+                      .map((key) => (
+                        <th key={key} className="pb-1 pr-2 whitespace-nowrap min-w-[80px]">
+                          {key}
+                        </th>
+                      ))}
                     <th className="pb-1 pr-2"></th>
                   </tr>
                 </thead>
                 <tbody>
                   {data.tracks.map((track, i) => (
                     <tr key={track.track_id ?? i} className="border-t border-white/10 group">
-                      <td className="py-1 pr-2 text-white/40">{i + 1}</td>
-                      <td className="py-1 pr-2">{track.name}</td>
-                      <td className="py-1 pr-2 text-white/70">{track.artist}</td>
-                      <td className="py-1 pr-2 text-white/50">{formatDuration(track.duration_ms)}</td>
-                      {data.metadata_keys.filter((k) => visibleColumns.has(k)).map((key) => (
-                        <td key={key} className="py-1 pr-2 text-white/50">{track.metadata[key] ?? '—'}</td>
-                      ))}
+                      <td className="py-1 pr-2 text-white/40 whitespace-nowrap">{i + 1}</td>
+                      <td className="py-1 pr-2 whitespace-nowrap max-w-[150px] truncate" title={track.name}>
+                        {track.name}
+                      </td>
+                      <td className="py-1 pr-2 text-white/70 whitespace-nowrap max-w-[120px] truncate" title={track.artist}>
+                        {track.artist}
+                      </td>
+                      <td className="py-1 pr-2 text-white/50 whitespace-nowrap">
+                        {formatDuration(track.duration_ms)}
+                      </td>
+                      {data.metadata_keys
+                        .filter((k) => visibleColumns.has(k))
+                        .map((key) => {
+                          const isEditing = editingCell?.trackIndex === i && editingCell?.column === key
+                          const val = track.metadata[key] ?? ''
+
+                          return (
+                            <td key={key} className="py-1 pr-2 text-white/50 whitespace-nowrap min-w-[80px]">
+                              {isEditing ? (
+                                <input
+                                  type="text"
+                                  autoFocus
+                                  value={editingValue}
+                                  onChange={(e) => setEditingValue(e.target.value)}
+                                  onPointerDown={(e) => e.stopPropagation()}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      e.preventDefault()
+                                      handleSaveCell(i, key, editingValue)
+                                    } else if (e.key === 'Escape') {
+                                      setEditingCell(null)
+                                    }
+                                  }}
+                                  onBlur={() => handleSaveCell(i, key, editingValue)}
+                                  className="bg-white/10 border border-white/30 rounded px-1 py-0.5 text-xs text-white font-body focus:outline-none w-24"
+                                />
+                              ) : (
+                                <span
+                                  onPointerDown={(e) => e.stopPropagation()}
+                                  onClick={() => {
+                                    setEditingCell({ trackIndex: i, column: key })
+                                    setEditingValue(String(val))
+                                  }}
+                                  className="cursor-pointer hover:text-white hover:bg-white/10 px-1 rounded transition-colors inline-block min-w-[30px] whitespace-nowrap"
+                                  title="Klicken zum Bearbeiten"
+                                >
+                                  {val !== '' ? String(val) : '—'}
+                                </span>
+                              )}
+                            </td>
+                          )
+                        })}
                       <td className="py-1 pr-2">
                         {track.track_id && (
                           <button
@@ -230,14 +328,81 @@ export function PlaylistDetailTile({
               />
             </div>
 
-            {!showAddForm && (
-              <button
+            <div className="shrink-0 flex items-center justify-between">
+              {!showAddForm && (
+                <button
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() => setShowAddForm(true)}
+                  className="text-left text-[10px] font-body text-white/50 hover:text-white/90 underline"
+                >
+                  + Add track
+                </button>
+              )}
+              {!showNewColumnForm && (
+                <button
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() => setShowNewColumnForm(true)}
+                  className="text-left text-[10px] font-body text-white/50 hover:text-white/90 underline"
+                >
+                  + Add column
+                </button>
+              )}
+
+              <a
+                href={`http://localhost:8001/generations/${generationId}/playlists/${playlistId}/pdf?columns=${Array.from(visibleColumns).join(',')}`}
+                download
                 onPointerDown={(e) => e.stopPropagation()}
-                onClick={() => setShowAddForm(true)}
-                className="shrink-0 text-left text-[10px] font-body text-white/50 hover:text-white/90 underline"
+                className="text-[10px] font-body text-white/50 hover:text-white/90 underline"
               >
-                + Add track
-              </button>
+                Export PDF
+              </a>
+            </div>
+
+            {showNewColumnForm && (
+              <div className="shrink-0 flex items-center gap-1.5">
+                <input
+                  type="text"
+                  value={newColumnName}
+                  onChange={(e) => setNewColumnName(e.target.value)}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  placeholder="Column name"
+                  className="bg-white/10 border border-white/30 rounded px-2 py-1 text-xs text-white font-body focus:outline-none focus:border-white/70 flex-1"
+                />
+                <button
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() => {
+                    const trimmed = newColumnName.trim()
+                    if (trimmed) {
+                      setVisibleColumns((prev) => new Set(prev).add(trimmed))
+                      setData((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              metadata_keys: prev.metadata_keys.includes(trimmed)
+                                ? prev.metadata_keys
+                                : [...prev.metadata_keys, trimmed],
+                            }
+                          : prev,
+                      )
+                    }
+                    setNewColumnName('')
+                    setShowNewColumnForm(false)
+                  }}
+                  className="text-[10px] font-body bg-white/20 hover:bg-white/30 text-white rounded px-2 py-1"
+                >
+                  Add
+                </button>
+                <button
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() => {
+                    setNewColumnName('')
+                    setShowNewColumnForm(false)
+                  }}
+                  className="text-[10px] font-body text-white/50 hover:text-white/90"
+                >
+                  Cancel
+                </button>
+              </div>
             )}
 
             {showAddForm && (
@@ -276,7 +441,7 @@ export function PlaylistDetailTile({
                 </div>
               </div>
             )}
-         </>
+          </>
         )}
       </div>
 

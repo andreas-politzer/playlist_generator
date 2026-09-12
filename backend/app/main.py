@@ -1,5 +1,6 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from pathlib import Path
 import pandas as pd
 import numpy as np
@@ -7,6 +8,7 @@ import math
 import json
 import uuid
 import sqlite3
+import io
 from datetime import datetime, timezone
 from sklearn.preprocessing import StandardScaler, MinMaxScaler, RobustScaler, PowerTransformer
 from sklearn.cluster import KMeans, DBSCAN, HDBSCAN, AgglomerativeClustering
@@ -16,6 +18,11 @@ from sklearn.metrics import silhouette_score
 from pydantic import BaseModel
 from sklearn.manifold import TSNE
 from scipy.cluster.hierarchy import linkage, dendrogram as scipy_dendrogram
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.units import mm
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib import colors
 app = FastAPI()
 
 app.add_middleware(
@@ -503,6 +510,40 @@ async def list_generations():
     result.sort(key=lambda g: g["created_at"], reverse=True)
     return result
 
+@app.get("/playlists/summary")
+async def list_playlists_summary():
+    conn = get_db()
+    archived_generation_ids = {
+        row["item_id"] for row in conn.execute(
+            "SELECT item_id FROM archive_items WHERE item_type = 'generation'"
+        ).fetchall()
+    }
+    archived_playlist_ids = {
+        row["item_id"] for row in conn.execute(
+            "SELECT item_id FROM archive_items WHERE item_type = 'playlist'"
+        ).fetchall()
+    }
+    conn.close()
+
+    result = []
+    for file in GENERATIONS_DIR.glob("*.json"):
+        data = json.loads(file.read_text())
+        if data["id"] in archived_generation_ids:
+            continue
+        for cluster in data.get("clusters", []):
+            if cluster.get("playlist_id") in archived_playlist_ids:
+                continue
+            result.append({
+                "playlist_id": cluster["playlist_id"],
+                "generation_id": data["id"],
+                "generation_name": data["name"],
+                "name": cluster.get("custom_name") or f"Playlist {cluster['cluster_id'] + 1}",
+                "cluster_id": cluster["cluster_id"],
+                "song_count": cluster.get("song_count"),
+                "duration_ms": cluster.get("duration_ms"),
+            })
+    return result
+
 @app.get("/generations/trash")
 async def list_generations_trash():
     result = []
@@ -965,6 +1006,14 @@ async def rename_playlist(generation_id: str, playlist_id: str, request: RenameP
     if cluster is None:
         raise HTTPException(status_code=404, detail="Playlist not found in this generation.")
 
+    name_taken = any(
+        c.get("playlist_id") != playlist_id
+        and (c.get("custom_name") or f"Playlist {c['cluster_id'] + 1}") == request.name
+        for c in data.get("clusters", [])
+    )
+    if name_taken:
+        raise HTTPException(status_code=409, detail="A playlist with this name already exists in this collection.")
+
     cluster["custom_name"] = request.name
     generation_file.write_text(json.dumps(data))
 
@@ -1078,7 +1127,7 @@ async def list_archived_items(folder_id: str | None = None):
             )
             if cluster is None:
                 continue
-            item["name"] = f"Playlist {cluster['cluster_id'] + 1}"
+            item["name"] = cluster.get("custom_name") or f"Playlist {cluster['cluster_id'] + 1}"
             item["song_count"] = cluster["song_count"]
             item["duration_ms"] = cluster["duration_ms"]
             item["parent_generation_name"] = generation_data["name"]
@@ -1358,4 +1407,158 @@ async def update_playlist_note(generation_id: str, playlist_id: str, request: Up
 
     cluster["note"] = request.note
     generation_file.write_text(json.dumps(data))
+    return {"status": "saved"}
+
+@app.get("/generations/{generation_id}/playlists/{playlist_id}/pdf")
+async def export_playlist_pdf(generation_id: str, playlist_id: str, columns: str = ""):
+    extra_columns = [c for c in columns.split(",") if c]
+    generation_file = GENERATIONS_DIR / f"{generation_id}.json"
+    if not generation_file.exists():
+        raise HTTPException(status_code=404, detail="Generation not found.")
+
+    data = json.loads(generation_file.read_text())
+    ensure_track_ids(data)
+    cluster = next((c for c in data.get("clusters", []) if c.get("playlist_id") == playlist_id), None)
+    if cluster is None:
+        raise HTTPException(status_code=404, detail="Playlist not found.")
+
+    playlist_name = cluster.get("custom_name") or f"Playlist {cluster['cluster_id'] + 1}"
+    tracks = cluster.get("tracks", [])
+    note = cluster.get("note", "")
+
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=letter,
+        topMargin=20 * mm,
+        bottomMargin=20 * mm,
+        leftMargin=15 * mm,
+        rightMargin=15 * mm
+    )
+    styles = getSampleStyleSheet()
+    story = []
+
+    story.append(Paragraph(playlist_name, styles["Title"]))
+    story.append(Paragraph(f"{len(tracks)} songs", styles["Normal"]))
+    if note:
+        story.append(Spacer(1, 6))
+        story.append(Paragraph(f"<i>{note}</i>", styles["Normal"]))
+    story.append(Spacer(1, 12))
+
+    def format_duration(ms):
+        if ms is None:
+            return "—"
+        total_seconds = round(ms / 1000)
+        minutes = total_seconds // 60
+        seconds = total_seconds % 60
+        return f"{minutes}:{seconds:02d}"
+
+    cell_style = styles["Normal"].clone("CellStyle")
+    cell_style.fontSize = 8
+    cell_style.leading = 10
+
+    header_style = styles["Normal"].clone("HeaderStyle")
+    header_style.fontSize = 8
+    header_style.textColor = colors.white
+
+    headers = ["#", "Track", "Artist", "Dur."] + extra_columns
+    table_data = [[Paragraph(h, header_style) for h in headers]]
+    
+    for i, track in enumerate(tracks):
+        row = [
+            Paragraph(str(i + 1), cell_style),
+            Paragraph(track.get("name") or "", cell_style),
+            Paragraph(track.get("artist") or "", cell_style),
+            Paragraph(format_duration(track.get("duration_ms")), cell_style),
+        ]
+        for col in extra_columns:
+            value = track.get("metadata", {}).get(col)
+            str_val = str(value) if value is not None else "—"
+            
+            # Lange URLs/IDs im PDF lesbar einkürzen, damit sie andere Spalten nicht abwürgen
+            if col.lower() in ["html", "url"] and len(str_val) > 28:
+                str_val = str_val[:25] + "..."
+            
+            row.append(Paragraph(str_val, cell_style))
+        table_data.append(row)
+
+    total_width = 495  # letter width minus 15mm margins
+
+    if extra_columns:
+        # Kompaktere Basis-Breiten, wenn Zusatzspalten da sind
+        base_widths = [20, 110, 80, 30]  # Summe = 240pt
+        remaining_width = total_width - sum(base_widths)  # 255pt übrig für Extras
+
+        raw_extra_widths = []
+        for col in extra_columns:
+            values = [str(track.get("metadata", {}).get(col) or "") for track in tracks]
+            # Auch Header-Länge (z.B. "Genre") mit einberechnen
+            max_len = max(len(col), max((len(v) for v in values if v != "—"), default=5))
+
+            # URLs/IDs gedeckelt halten, echte Text-Spalten (Genre, Mood) mindestens 65pt geben!
+            if col.lower() in ["html", "url", "id"]:
+                raw_width = 80
+            else:
+                raw_width = min(max(max_len * 6, 65), 140)
+
+            raw_extra_widths.append(raw_width)
+
+        sum_raw = sum(raw_extra_widths)
+        if sum_raw > 0:
+            scale = remaining_width / sum_raw
+            extra_widths = [w * scale for w in raw_extra_widths]
+        else:
+            extra_widths = [remaining_width / len(extra_columns) for _ in extra_columns]
+    else:
+        base_widths = [30, 260, 165, 40]
+        extra_widths = []
+
+    col_widths = base_widths + extra_widths
+
+    table = Table(table_data, colWidths=col_widths)
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#222222")),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f2f2f2")]),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#dddddd")),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    story.append(table)
+
+    doc.build(story)
+    pdf_bytes = buffer.getvalue()
+    buffer.close()
+
+    safe_filename = "".join(c if c.isalnum() or c in " -_" else "_" for c in playlist_name)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{safe_filename}.pdf"'},
+    )
+
+
+class SetTrackMetadataRequest(BaseModel):
+    column: str
+    value: str
+
+
+@app.post("/generations/{generation_id}/playlists/{playlist_id}/tracks/{track_id}/metadata")
+async def set_track_metadata(generation_id: str, playlist_id: str, track_id: str, request: SetTrackMetadataRequest):
+    generation_file = GENERATIONS_DIR / f"{generation_id}.json"
+    if not generation_file.exists():
+        raise HTTPException(status_code=404, detail="Generation not found.")
+
+    data = json.loads(generation_file.read_text())
+    ensure_track_ids(data)
+    cluster = next((c for c in data.get("clusters", []) if c.get("playlist_id") == playlist_id), None)
+    if cluster is None:
+        raise HTTPException(status_code=404, detail="Playlist not found.")
+
+    track = next((t for t in cluster.get("tracks", []) if str(t.get("track_id")) == str(track_id) or str(t.get("id")) == str(track_id)), None)
+    if track is None:
+        raise HTTPException(status_code=404, detail="Track not found.")
+
+    track.setdefault("metadata", {})[request.column] = request.value
+    generation_file.write_text(json.dumps(data, indent=2))
     return {"status": "saved"}
