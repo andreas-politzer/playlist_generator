@@ -37,7 +37,7 @@ app.add_middleware(
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
-MAX_OPTIMIZE_TRIALS = 20
+MAX_OPTIMIZE_TRIALS = 250
 MAX_OPTIMIZE_SUBSAMPLE = 2000
 
 UPLOAD_DIR = Path(__file__).parent.parent.parent / "data"
@@ -1800,6 +1800,29 @@ def load_collection_features(generation_id: str):
     return data, feature_names, points, track_refs
 
 
+def compute_pareto_front(results):
+    """
+    Jedes result muss 'objective_values' enthalten: eine Liste von Zahlen,
+    wobei für JEDES Ziel höher = besser gilt (Minimierungsziele müssen
+    vorher bereits invertiert worden sein, z.B. via -value oder 1/(1+value)).
+    Gibt die Teilmenge der results zurück, die nicht von einem anderen
+    result in ALLEN Zielen gleichzeitig dominiert wird.
+    """
+    pareto = []
+    for i, r in enumerate(results):
+        dominated = False
+        for j, other in enumerate(results):
+            if i == j:
+                continue
+            if all(other["objective_values"][k] >= r["objective_values"][k] for k in range(len(r["objective_values"]))) and \
+               any(other["objective_values"][k] > r["objective_values"][k] for k in range(len(r["objective_values"]))):
+                dominated = True
+                break
+        if not dominated:
+            pareto.append(r)
+    return pareto
+
+
 GUARDRAIL_LEVELS = [
     {"name": "strict", "max_noise_ratio": 0.15, "min_cluster_size": 4, "max_cluster_share": 0.5, "min_clusters": 3},
     {"name": "moderate", "max_noise_ratio": 0.25, "min_cluster_size": 3, "max_cluster_share": 0.6, "min_clusters": 3},
@@ -1807,24 +1830,40 @@ GUARDRAIL_LEVELS = [
 ]
 
 
-def evaluate_pipeline(X, scaler_name, algorithm_name, params, track_refs=None, guardrails=None):
+def evaluate_pipeline(X, scaler_name, algorithm_name, params, track_refs=None, guardrails=None, reducer_name="none", n_components=None):
     scalers = {
         "standard": StandardScaler(),
         "minmax": MinMaxScaler(),
         "robust": RobustScaler(),
+        "power": PowerTransformer(),
     }
     scaler = scalers[scaler_name]
     X_scaled = scaler.fit_transform(X)
 
+    fitted_reducer = None
+    X_for_clustering = X_scaled
+    if reducer_name == "pca" and n_components is not None:
+        max_components = min(X_scaled.shape[0] - 1, X_scaled.shape[1] - 1, 10)
+        actual_components = min(n_components, max_components)
+        if actual_components >= 2:
+            fitted_reducer = PCA(n_components=actual_components, random_state=42)
+            X_for_clustering = fitted_reducer.fit_transform(X_scaled)
+
     if algorithm_name == "kmeans":
         model = KMeans(n_clusters=params["k"], n_init=10, random_state=42)
-        labels = model.fit_predict(X_scaled)
+        labels = model.fit_predict(X_for_clustering)
     elif algorithm_name == "agglomerative":
         model = AgglomerativeClustering(n_clusters=params["k"], linkage="ward")
-        labels = model.fit_predict(X_scaled)
+        labels = model.fit_predict(X_for_clustering)
     elif algorithm_name == "dbscan":
         model = DBSCAN(eps=params["eps"], min_samples=params["min_samples"])
-        labels = model.fit_predict(X_scaled)
+        labels = model.fit_predict(X_for_clustering)
+    elif algorithm_name == "hdbscan":
+        model = HDBSCAN(min_cluster_size=params["min_cluster_size"])
+        labels = model.fit_predict(X_for_clustering)
+    elif algorithm_name == "gmm":
+        model = GaussianMixture(n_components=params["k"], covariance_type=params.get("covariance_type", "full"), random_state=42)
+        labels = model.fit_predict(X_for_clustering)
     else:
         raise ValueError(f"Unknown algorithm: {algorithm_name}")
 
@@ -1863,7 +1902,7 @@ def evaluate_pipeline(X, scaler_name, algorithm_name, params, track_refs=None, g
             "percentage": round(cluster_sizes.max() / songs_total * 100, 1),
         })
 
-    X_valid = X_scaled[non_noise_mask]
+    X_valid = X_for_clustering[non_noise_mask]
     labels_valid = labels[non_noise_mask]
 
     silhouette = silhouette_score(X_valid, labels_valid)
@@ -1880,6 +1919,8 @@ def evaluate_pipeline(X, scaler_name, algorithm_name, params, track_refs=None, g
         "algorithm": algorithm_name,
         "params": params,
         "warnings": warnings,
+        "reducer_name": reducer_name if fitted_reducer is not None else "none",
+        "reducer_n_components": fitted_reducer.n_components_ if fitted_reducer is not None else None,
         "metrics": {
             "silhouette_score": silhouette,
             "calinski_harabasz_index": calinski,
@@ -1929,6 +1970,9 @@ class WizardJob:
         self.guardrail_level_name = GUARDRAIL_LEVELS[0]["name"]
         self.guardrails_used = None
         self.guardrails_relaxed = False
+        self.raw_top_candidates = []
+        self.search_matrix = None
+        self.search_track_refs = None
 
     def to_dict(self):
         return {
@@ -2023,31 +2067,58 @@ def run_optimization_job(job: "WizardJob", generation_id: str, request: "Optimiz
                 if job.cancel_requested:
                     raise optuna.TrialPruned()
 
-                scaler_name = trial.suggest_categorical("scaler", ["standard", "minmax", "robust"])
-                algorithm_name = trial.suggest_categorical("algorithm", ["kmeans", "agglomerative", "dbscan"])
+                scaler_name = trial.suggest_categorical("scaler", ["standard", "minmax", "robust", "power"])
+                algorithm_name = trial.suggest_categorical("algorithm", ["kmeans", "agglomerative", "dbscan", "hdbscan", "gmm"])
 
-                if algorithm_name in ("kmeans", "agglomerative"):
+                if algorithm_name in ("kmeans", "agglomerative", "gmm"):
                     k = trial.suggest_int("k", k_low, k_high)
-                    params = {"k": k}
-                else:
+                    if algorithm_name == "gmm":
+                        covariance_type = trial.suggest_categorical("covariance_type", ["full", "tied", "diag", "spherical"])
+                        params = {"k": k, "covariance_type": covariance_type}
+                    else:
+                        params = {"k": k}
+                elif algorithm_name == "dbscan":
                     eps = trial.suggest_float("eps", 0.1, 2.0)
                     min_samples = trial.suggest_int("min_samples", 3, 15)
                     params = {"eps": eps, "min_samples": min_samples}
+                else:
+                    min_cluster_size = trial.suggest_int("min_cluster_size", 4, max(5, k_high // 2))
+                    params = {"min_cluster_size": min_cluster_size}
 
-                result = evaluate_pipeline(X_search, scaler_name, algorithm_name, params, track_refs_search, guardrail_level)
+                reducer_name = trial.suggest_categorical("reducer", ["none", "pca"])
+                n_components = trial.suggest_int("n_components", 2, 10) if reducer_name == "pca" else None
+
+                result = evaluate_pipeline(X_search, scaler_name, algorithm_name, params, track_refs_search, guardrail_level, reducer_name, n_components)
 
                 job.trial += 1
                 if "rejected_reason" in result:
                     stage_rejections.append(result)
                     raise optuna.TrialPruned()
 
-                stage_results.append(result)
-                score = composite_score(result["metrics"], request.preset)
-                if job.best_score is None or score > job.best_score:
-                    job.best_score = round(score, 4)
-                return score
+                m = result["metrics"]
+                objective_values = [
+                    m["silhouette_score"],
+                    m["cluster_balance"],
+                    -m["davies_bouldin_index"],
+                    -m["noise_ratio"],
+                ]
+                if use_target:
+                    resulting_count = len(set(l for l in result["labels"] if l != -1))
+                    objective_values.append(-abs(resulting_count - request.target_playlist_count))
 
-            study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler(seed=42))
+                result["objective_values"] = objective_values
+                stage_results.append(result)
+
+                preset_score = composite_score(m, request.preset)
+                if job.best_score is None or preset_score > job.best_score:
+                    job.best_score = round(preset_score, 4)
+                return tuple(objective_values)
+
+            n_objectives = 5 if use_target else 4
+            study = optuna.create_study(
+                directions=["maximize"] * n_objectives,
+                sampler=optuna.samplers.NSGAIISampler(seed=42),
+            )
             study.optimize(objective, n_trials=MAX_OPTIMIZE_TRIALS, show_progress_bar=False)
 
             if job.cancel_requested:
@@ -2090,12 +2161,17 @@ def run_optimization_job(job: "WizardJob", generation_id: str, request: "Optimiz
             job.error = "No pipeline configuration produced a usable result for this collection."
             return
 
-        results.sort(key=lambda r: composite_score(r["metrics"], request.preset), reverse=True)
+        pareto_results = compute_pareto_front(results)
+        pareto_results.sort(key=lambda r: composite_score(r["metrics"], request.preset), reverse=True)
+        results = pareto_results
+
+        job.search_matrix = X_search
+        job.search_track_refs = track_refs_search
 
         seen_algorithms = set()
         top_candidates = []
         for r in results:
-            key = (r["algorithm"], r["scaler"])
+            key = (r["algorithm"], r["scaler"], r.get("reducer_name", "none"))
             if key in seen_algorithms:
                 continue
             seen_algorithms.add(key)
@@ -2122,7 +2198,9 @@ def run_optimization_job(job: "WizardJob", generation_id: str, request: "Optimiz
 
             response_candidates.append({
                 "id": str(i),
-                "name": f"{r['scaler'].capitalize()}Scaler + {r['algorithm'].capitalize()} ({', '.join(f'{k}={v}' for k, v in r['params'].items())})",
+                "name": f"{r['scaler'].capitalize()}Scaler"
+                + (f" + PCA({r['reducer_n_components']})" if r.get("reducer_name") == "pca" else "")
+                + f" + {r['algorithm'].capitalize()} ({', '.join(f'{k}={v}' for k, v in r['params'].items())})",
                 "algorithm": r["algorithm"],
                 "scaler": r["scaler"],
                 "params": r["params"],
@@ -2131,9 +2209,13 @@ def run_optimization_job(job: "WizardJob", generation_id: str, request: "Optimiz
                 "warnings": resolved_warnings,
                 "requires_confirmation": len(resolved_warnings) > 0,
                 "guardrail_level_name": used_guardrail_level["name"],
+                "sample_playlist_count": len(set(l for l in r["labels"] if l != -1)),
+                "reducer_name": r.get("reducer_name", "none"),
+                "reducer_n_components": r.get("reducer_n_components"),
             })
 
         job.candidates = response_candidates
+        job.raw_top_candidates = top_candidates
         job.guardrails_used = used_guardrail_level
         job.guardrails_relaxed = used_guardrail_level["name"] != GUARDRAIL_LEVELS[0]["name"] if used_guardrail_level else False
         job.status = "completed"
@@ -2145,6 +2227,88 @@ def run_optimization_job(job: "WizardJob", generation_id: str, request: "Optimiz
         global wizard_active_job_id
         with wizard_jobs_lock:
             wizard_active_job_id = None
+
+
+def run_permutation_test(X, labels, n_permutations=500, seed=42):
+    non_noise_mask = labels != -1
+    X_valid = X[non_noise_mask]
+    labels_valid = labels[non_noise_mask]
+
+    if len(set(labels_valid)) < 2:
+        return None
+
+    real_ch = calinski_harabasz_score(X_valid, labels_valid)
+    real_db = davies_bouldin_score(X_valid, labels_valid)
+
+    rng = np.random.default_rng(seed)
+    ch_better_or_equal = 0
+    db_better_or_equal = 0
+
+    valid_permutations = 0
+    for _ in range(n_permutations):
+        shuffled_labels = rng.permutation(labels_valid)
+        try:
+            perm_ch = calinski_harabasz_score(X_valid, shuffled_labels)
+            perm_db = davies_bouldin_score(X_valid, shuffled_labels)
+        except ValueError:
+            continue
+        valid_permutations += 1
+        if perm_ch >= real_ch:
+            ch_better_or_equal += 1
+        if perm_db <= real_db:
+            db_better_or_equal += 1
+
+    if valid_permutations == 0:
+        return None
+
+    ch_p_value = (ch_better_or_equal + 1) / (valid_permutations + 1)
+    db_p_value = (db_better_or_equal + 1) / (valid_permutations + 1)
+
+    return {
+        "permutations_count": n_permutations,
+        "ch_percentile": round((1 - ch_p_value) * 100, 1),
+        "db_percentile": round((1 - db_p_value) * 100, 1),
+        "ch_p_value": round(ch_p_value, 4),
+        "db_p_value": round(db_p_value, 4),
+    }
+
+
+class ValidateCandidateRequest(BaseModel):
+    candidate_id: str
+
+
+@app.post("/wizard/jobs/{job_id}/validate")
+async def validate_candidate_significance(job_id: str, request: ValidateCandidateRequest):
+    with wizard_jobs_lock:
+        job = wizard_jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    if job.search_matrix is None:
+        raise HTTPException(status_code=400, detail="No search data available for this job.")
+
+    candidate = next((c for i, c in enumerate(job.raw_top_candidates) if str(i) == request.candidate_id), None)
+    if candidate is None:
+        raise HTTPException(status_code=404, detail="Candidate not found in this job.")
+
+    labels = np.asarray(candidate["labels"])
+
+    scalers = {"standard": StandardScaler(), "minmax": MinMaxScaler(), "robust": RobustScaler(), "power": PowerTransformer()}
+    fitted_scaler = scalers[candidate["scaler"]]
+    X_scaled_for_candidate = fitted_scaler.fit_transform(job.search_matrix)
+
+    X_for_test = X_scaled_for_candidate
+    if candidate.get("reducer_name") == "pca" and candidate.get("reducer_n_components"):
+        max_components = min(X_scaled_for_candidate.shape[0] - 1, X_scaled_for_candidate.shape[1] - 1, 10)
+        actual_components = min(candidate["reducer_n_components"], max_components)
+        if actual_components >= 2:
+            reducer = PCA(n_components=actual_components, random_state=42)
+            X_for_test = reducer.fit_transform(X_scaled_for_candidate)
+
+    result = run_permutation_test(X_for_test, labels)
+    if result is None:
+        raise HTTPException(status_code=400, detail="Not enough valid clusters to run a permutation test.")
+
+    return result
 
 
 @app.post("/generations/{generation_id}/optimize", status_code=202)
@@ -2188,6 +2352,8 @@ class CreateOptimizedRequest(BaseModel):
     params: dict
     allow_guardrail_violations: bool = False
     guardrail_level_name: str = "strict"
+    reducer_name: str = "none"
+    reducer_n_components: int | None = None
 
 
 def compute_scaled_features(track_features: dict, feature_names: list, scaler):
@@ -2211,7 +2377,7 @@ async def create_optimized_generation(generation_id: str, request: CreateOptimiz
 
     X = np.array(points)
     guardrail_level = next((g for g in GUARDRAIL_LEVELS if g["name"] == request.guardrail_level_name), GUARDRAIL_LEVELS[0])
-    result = evaluate_pipeline(X, request.scaler, request.algorithm, request.params, track_refs, guardrail_level)
+    result = evaluate_pipeline(X, request.scaler, request.algorithm, request.params, track_refs, guardrail_level, request.reducer_name, request.reducer_n_components)
     if "rejected_reason" in result:
         raise HTTPException(status_code=400, detail=f"This pipeline configuration is no longer valid on the full collection: {result.get('detail', result['rejected_reason'])}")
 
@@ -2299,7 +2465,7 @@ async def create_optimized_generation(generation_id: str, request: CreateOptimiz
         "optimization_status": "completed",
         "wizard_metadata": {
             "preset_used": request.preset,
-            "pipeline_applied": {"scaler": request.scaler, "algorithm": request.algorithm, "params": request.params},
+            "pipeline_applied": {"scaler": request.scaler, "algorithm": request.algorithm, "params": request.params, "reducer": request.reducer_name, "reducer_n_components": request.reducer_n_components},
             "metrics_before": metrics_before,
             "metrics_after": result["metrics"],
             "input_song_count": len(points),
@@ -2314,7 +2480,7 @@ async def create_optimized_generation(generation_id: str, request: CreateOptimiz
     tmp_file.write_text(json.dumps(new_generation))
     tmp_file.rename(final_file)
 
-    return {"status": "created", "generation_id": new_id, "name": new_generation["name"]}
+    return {"status": "created", "generation_id": new_id, "name": new_generation["name"], "playlist_count": new_generation["playlist_count"]}
 
 @app.get("/generations/{generation_id}/liner-notes")
 async def get_liner_notes(generation_id: str):
@@ -2362,6 +2528,7 @@ async def get_liner_notes(generation_id: str):
             "title": "Pipeline",
             "rows": [
                 {"label": "Scaler", "value": pipeline.get("scaler")},
+                {"label": "Dimensionality Reduction", "value": f"PCA ({pipeline.get('reducer_n_components')} components)" if pipeline.get("reducer") == "pca" else "None"},
                 {"label": "Algorithm", "value": pipeline.get("algorithm")},
                 {"label": "Parameters", "value": ", ".join(f"{k}={v}" for k, v in pipeline.get("params", {}).items())},
             ],

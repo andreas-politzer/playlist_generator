@@ -40,6 +40,9 @@ interface CandidateResult {
   warnings: CandidateWarning[]
   requires_confirmation: boolean
   guardrail_level_name: string
+  sample_playlist_count: number
+  reducer_name: string
+  reducer_n_components: number | null
 }
 
 interface WizardJobStatus {
@@ -88,11 +91,32 @@ async function cancelJob(jobId: string): Promise<void> {
   await fetch(`http://localhost:8001/wizard/jobs/${jobId}/cancel`, { method: 'POST' })
 }
 
+interface SignificanceResult {
+  permutations_count: number
+  ch_percentile: number
+  db_percentile: number
+  ch_p_value: number
+  db_p_value: number
+}
+
+async function validateCandidate(jobId: string, candidateId: string): Promise<SignificanceResult> {
+  const response = await fetch(`http://localhost:8001/wizard/jobs/${jobId}/validate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ candidate_id: candidateId }),
+  })
+  if (!response.ok) {
+    const body = await response.json().catch(() => null)
+    throw new Error(body?.detail ?? 'Validation failed.')
+  }
+  return response.json()
+}
+
 async function createOptimizedCollection(
   generationId: string,
   preset: string,
   candidate: CandidateResult,
-): Promise<{ status: string; generation_id: string; name: string }> {
+): Promise<{ status: string; generation_id: string; name: string; playlist_count: number }> {
   const response = await fetch(`http://localhost:8001/generations/${generationId}/optimize/create`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -103,6 +127,8 @@ async function createOptimizedCollection(
       params: candidate.params,
       allow_guardrail_violations: candidate.requires_confirmation,
       guardrail_level_name: candidate.guardrail_level_name,
+      reducer_name: candidate.reducer_name,
+      reducer_n_components: candidate.reducer_n_components,
     }),
   })
   if (!response.ok) {
@@ -151,9 +177,12 @@ export function PinballWizardTile({
   const [candidates, setCandidates] = useState<CandidateResult[]>([])
   const [error, setError] = useState<string | null>(null)
   const [createdName, setCreatedName] = useState<string | null>(null)
+  const [createdPlaylistCount, setCreatedPlaylistCount] = useState<number | null>(null)
   const [applyingId, setApplyingId] = useState<string | null>(null)
   const [jobProgress, setJobProgress] = useState<WizardJobStatus | null>(null)
   const currentJobId = useRef<string | null>(null)
+  const [significanceResults, setSignificanceResults] = useState<Record<string, SignificanceResult>>({})
+  const [validatingId, setValidatingId] = useState<string | null>(null)
 
   useLayoutEffect(() => {
     const element = contentRef.current
@@ -222,6 +251,19 @@ export function PinballWizardTile({
     if (currentJobId.current) cancelJob(currentJobId.current)
   }
 
+  const handleValidate = async (candidateId: string) => {
+    if (!currentJobId.current) return
+    setValidatingId(candidateId)
+    try {
+      const result = await validateCandidate(currentJobId.current, candidateId)
+      setSignificanceResults((prev) => ({ ...prev, [candidateId]: result }))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Validation failed.')
+    } finally {
+      setValidatingId(null)
+    }
+  }
+
   const applyCandidate = async (candidate: CandidateResult) => {
     if (!anchoredGeneration || !selectedPreset) return
     setApplyingId(candidate.id)
@@ -229,6 +271,7 @@ export function PinballWizardTile({
     try {
       const result = await createOptimizedCollection(anchoredGeneration.generationId, selectedPreset, candidate)
       setCreatedName(result.name)
+      setCreatedPlaylistCount(result.playlist_count)
       setWizardState('applied')
       onOptimizedCollectionCreated()
     } catch (err) {
@@ -411,6 +454,28 @@ export function PinballWizardTile({
                     Found with relaxed guardrails ({candidate.guardrail_level_name})
                   </span>
                 )}
+                {candidate.reducer_name === 'pca' && (
+                  <span className="text-[9px] font-body text-blue-300">
+                    Uses PCA dimensionality reduction ({candidate.reducer_n_components} components)
+                  </span>
+                )}
+                <span className="text-[9px] font-body text-white/30">
+                  ~{candidate.sample_playlist_count} playlists (estimated on search sample)
+                </span>
+                {significanceResults[candidate.id] ? (
+                  <span className="text-[9px] font-body text-green-300">
+                    Better than at least {significanceResults[candidate.id].ch_percentile}% of random assignments (CH & DB, p ≤ {significanceResults[candidate.id].ch_p_value})
+                  </span>
+                ) : (
+                  <button
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={() => handleValidate(candidate.id)}
+                    disabled={validatingId !== null}
+                    className="text-[9px] font-body text-white/40 hover:text-white/70 underline self-start disabled:opacity-50"
+                  >
+                    {validatingId === candidate.id ? 'Validating...' : 'Validate statistical significance'}
+                  </button>
+                )}
                 <div className="flex flex-wrap gap-x-3 gap-y-0.5">
                   <span className="text-[9px] font-body text-white/50">Silhouette: {candidate.metrics.silhouette_score}</span>
                   <span className="text-[9px] font-body text-white/50">Balance: {candidate.metrics.cluster_balance}</span>
@@ -456,6 +521,9 @@ export function PinballWizardTile({
         {wizardState === 'applied' && (
           <div className="flex flex-col gap-2 items-center text-center py-2">
             <span className="text-xs font-body text-green-400">✓ "{createdName}" created</span>
+            {createdPlaylistCount !== null && (
+              <span className="text-[10px] font-body text-white/40">{createdPlaylistCount} playlists in the final collection</span>
+            )}
             <span className="text-[10px] font-body text-white/50">Check the Music Library for the new collection.</span>
             <button
               onPointerDown={(e) => e.stopPropagation()}
