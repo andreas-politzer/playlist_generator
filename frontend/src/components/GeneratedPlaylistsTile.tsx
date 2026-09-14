@@ -37,6 +37,7 @@ interface Cluster {
 
 interface GenerationDetail extends GenerationSummary {
   clusters: Cluster[]
+  wizard_metadata?: Record<string, unknown>
 }
 
 async function fetchGenerationFeatures(generationId: string): Promise<string[]> {
@@ -153,6 +154,8 @@ function useDropOnTarget(
   onDroppedOnChartsAnchor?: () => void,
   qualityAnchorRef?: React.RefObject<HTMLDivElement | null>,
   onDroppedOnQualityAnchor?: () => void,
+  wizardAnchorRef?: React.RefObject<HTMLDivElement | null>,
+  onDroppedOnWizardAnchor?: () => void,
 ) {
   const [isWobbling, setIsWobbling] = useState(false)
   const didDragRef = useRef(false)
@@ -178,6 +181,7 @@ function useDropOnTarget(
     setTargetFeedback(archiveRef, false)
     if (chartsAnchorRef) setTargetFeedback(chartsAnchorRef, false)
     if (qualityAnchorRef) setTargetFeedback(qualityAnchorRef, false)
+    if (wizardAnchorRef) setTargetFeedback(wizardAnchorRef, false)
   }
 
   const onGripPointerDown = (e: React.PointerEvent) => {
@@ -220,6 +224,7 @@ function useDropOnTarget(
     setTargetFeedback(archiveRef, checkOverlap(bounds, archiveRef))
     if (chartsAnchorRef) setTargetFeedback(chartsAnchorRef, checkOverlap(bounds, chartsAnchorRef))
     if (qualityAnchorRef) setTargetFeedback(qualityAnchorRef, checkOverlap(bounds, qualityAnchorRef))
+    if (wizardAnchorRef) setTargetFeedback(wizardAnchorRef, checkOverlap(bounds, wizardAnchorRef))
   }
 
     const onGripPointerUp = () => {
@@ -243,6 +248,9 @@ function useDropOnTarget(
       } else if (qualityAnchorRef && checkOverlap(bounds, qualityAnchorRef)) {
         debugLog('dropped on quality anchor')
         onDroppedOnQualityAnchor?.()
+      } else if (wizardAnchorRef && checkOverlap(bounds, wizardAnchorRef)) {
+        debugLog('dropped on wizard anchor')
+        onDroppedOnWizardAnchor?.()
       }
     }
 
@@ -277,6 +285,8 @@ function GenerationRow({
   onAnchorGeneration,
   qualityGenerationAnchorRef,
   onAnchorQualityGeneration,
+  wizardGenerationAnchorRef,
+  onAnchorWizardGeneration,
 }: {
   gen: GenerationSummary
   onOpen: () => void
@@ -290,6 +300,8 @@ function GenerationRow({
   onAnchorGeneration: (anchor: import('../core/types').AnchoredGeneration) => void
   qualityGenerationAnchorRef: React.RefObject<HTMLDivElement | null>
   onAnchorQualityGeneration: (anchor: import('../core/types').AnchoredGeneration) => void
+  wizardGenerationAnchorRef: React.RefObject<HTMLDivElement | null>
+  onAnchorWizardGeneration: (anchor: import('../core/types').AnchoredGeneration) => void
 }) {
   const previewSize = { width: 180, height: 40 }
   const { isWobbling, previewPos, didDragRef, gripHandlers } = useDropOnTarget(
@@ -305,6 +317,8 @@ function GenerationRow({
       ),
     qualityGenerationAnchorRef,
     () => onAnchorQualityGeneration({ type: 'generation', generationId: gen.id, label: gen.name, features: [] }),
+    wizardGenerationAnchorRef,
+    () => onAnchorWizardGeneration({ type: 'generation', generationId: gen.id, label: gen.name, features: [], playlistCount: gen.playlist_count }),
   )
 
   return (
@@ -599,6 +613,9 @@ export function GeneratedPlaylistsTile({
   qualityGenerationAnchorRef,
   onAnchorQualityPlaylist,
   onAnchorQualityGeneration,
+  wizardGenerationAnchorRef,
+  onAnchorWizardGeneration,
+  onOpenLinerNotes,
 }: {
   startPosition: ModulePosition
   onDragEnd?: (bounds: DOMRect | undefined) => void
@@ -620,6 +637,9 @@ export function GeneratedPlaylistsTile({
   qualityGenerationAnchorRef: React.RefObject<HTMLDivElement | null>
   onAnchorQualityPlaylist: (anchor: import('../core/types').AnchoredPlaylist) => void
   onAnchorQualityGeneration: (anchor: import('../core/types').AnchoredGeneration) => void
+  wizardGenerationAnchorRef: React.RefObject<HTMLDivElement | null>
+  onAnchorWizardGeneration: (anchor: import('../core/types').AnchoredGeneration) => void
+  onOpenLinerNotes: (generationId: string) => void
 }) {
 
   const [viewMode, setViewMode] = useState<'collections' | 'playlists'>('collections')
@@ -825,6 +845,8 @@ export function GeneratedPlaylistsTile({
                 onAnchorGeneration={onAnchorGeneration}
                 qualityGenerationAnchorRef={qualityGenerationAnchorRef}
                 onAnchorQualityGeneration={onAnchorQualityGeneration}
+                wizardGenerationAnchorRef={wizardGenerationAnchorRef}
+                onAnchorWizardGeneration={onAnchorWizardGeneration}
               />
             )})}
           </div>
@@ -841,6 +863,15 @@ export function GeneratedPlaylistsTile({
             </button>
 
             <div className="flex-1 overflow-y-auto space-y-2">
+              {detail.wizard_metadata && (
+                <div
+                  onClick={() => onOpenLinerNotes(detail.id)}
+                  className="bg-white/10 hover:bg-white/15 rounded-lg px-2 py-1.5 cursor-pointer border border-white/20"
+                >
+                  <span className="text-xs font-body text-white/90">Liner Notes</span>
+                  <span className="block text-[10px] font-body text-white/40">How this collection was optimized</span>
+                </div>
+              )}
               {detail.clusters.map((cluster) => (
                 <PlaylistRow
                   key={cluster.playlist_id}

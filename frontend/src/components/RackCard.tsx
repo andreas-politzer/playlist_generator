@@ -12,6 +12,7 @@ const MODULE_LABELS: Record<ModuleId, string> = {
   archive: 'Archive',
   visualizations: 'Charts',
   qualityStreet: 'Quality Street',
+  pinballWizard: 'Pinball Wizard',
 }
 
 const GAP = 12

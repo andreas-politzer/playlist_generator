@@ -7,6 +7,8 @@ import { GeneratedPlaylistsTile } from './components/GeneratedPlaylistsTile'
 import { ArchiveTile } from './components/ArchiveTile'
 import { VisualizationsTile } from './components/VisualizationsTile'
 import { QualityStreetTile } from './components/QualityStreetTile'
+import { PinballWizardTile } from './components/PinballWizardTile'
+import { LinerNotesTile } from './components/LinerNotesTile'
 import { QualityResultTile } from './components/QualityResultTile'
 import { ChartTile } from './components/ChartTile'
 import { PlaylistDetailTile } from './components/PlaylistDetailTile'
@@ -29,10 +31,12 @@ function App() {
   const chartsGenerationAnchorRef = useRef<HTMLDivElement>(null)
   const qualityPlaylistAnchorRef = useRef<HTMLDivElement>(null)
   const qualityGenerationAnchorRef = useRef<HTMLDivElement>(null)
+  const wizardGenerationAnchorRef = useRef<HTMLDivElement>(null)
   const [anchoredPlaylist, setAnchoredPlaylist] = useState<AnchoredPlaylist | null>(null)
   const [anchoredGeneration, setAnchoredGeneration] = useState<AnchoredGeneration | null>(null)
   const [qualityAnchoredPlaylist, setQualityAnchoredPlaylist] = useState<AnchoredPlaylist | null>(null)
   const [qualityAnchoredGeneration, setQualityAnchoredGeneration] = useState<AnchoredGeneration | null>(null)
+  const [wizardAnchoredGeneration, setWizardAnchoredGeneration] = useState<AnchoredGeneration | null>(null)
   const { bringToFront, getZIndex } = useZIndexManager()
   const { tiles: chartTiles, addTile: addChartTile, removeTile: removeChartTile, bringTileToFront: bringChartTileToFront } = useVisualizationTiles({ bringToFront })
 
@@ -80,7 +84,8 @@ function App() {
   const generatedLocation = locations.generatedPlaylists
   const archiveLocation = locations.archive
   const visualizationsLocation = locations.visualizations
-  const qualityStreetLocation = locations.qualityStreet
+    const qualityStreetLocation = locations.qualityStreet
+  const pinballWizardLocation = locations.pinballWizard
 
   const checkRackOverlap = (bounds: DOMRect | undefined) => {
     const rackBounds = rackRef.current?.getBoundingClientRect()
@@ -213,6 +218,11 @@ function App() {
           qualityGenerationAnchorRef={qualityGenerationAnchorRef}
           onAnchorQualityPlaylist={setQualityAnchoredPlaylist}
           onAnchorQualityGeneration={setQualityAnchoredGeneration}
+          wizardGenerationAnchorRef={wizardGenerationAnchorRef}
+          onAnchorWizardGeneration={setWizardAnchoredGeneration}
+          onOpenLinerNotes={(generationId) =>
+            addChartTile({ x: 550, y: 150 }, undefined, { type: 'generation', generationId }, {}, 'liner-notes')
+          }
         />
       )}
       
@@ -278,6 +288,21 @@ function App() {
         />
       )}
 
+      {pinballWizardLocation.place === 'canvas' && (
+        <PinballWizardTile
+          startPosition={pinballWizardLocation.position}
+          onDragEnd={(bounds) => {
+            if (checkRackOverlap(bounds)) moveToRack('pinballWizard')
+          }}
+          onDragStart={() => bringToFront('pinballWizard')}
+          onDragMove={handleModuleDragMove}
+          zIndex={getZIndex('pinballWizard')}
+          generationAnchorRef={wizardGenerationAnchorRef}
+          anchoredGeneration={wizardAnchoredGeneration}
+          onClearGeneration={() => setWizardAnchoredGeneration(null)}
+          onOptimizedCollectionCreated={loadGenerations}
+        />
+      )}
       <RackCard
         locations={locations}
         onPullOut={(id, position) => moveToCanvas(id, position)}
@@ -304,6 +329,16 @@ function App() {
             position={tile.position}
             generationId={tile.source.generationId}
             playlistId={tile.source.playlistId}
+            zIndex={getZIndex(tile.id)}
+            onClose={removeChartTile}
+            onFocus={bringChartTileToFront}
+          />
+        ) : (tile.kind as any) === 'liner-notes' ? (
+          <LinerNotesTile
+            key={tile.id}
+            id={tile.id}
+            position={tile.position}
+            generationId={(tile.source as any)?.generationId}
             zIndex={getZIndex(tile.id)}
             onClose={removeChartTile}
             onFocus={bringChartTileToFront}

@@ -16,4 +16,5 @@ export interface AnchoredGeneration {
   generationId: string
   label: string
   features: string[]
+  playlistCount?: number
 }

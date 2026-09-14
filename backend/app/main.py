@@ -9,6 +9,9 @@ import json
 import uuid
 import sqlite3
 import io
+import optuna
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from sklearn.preprocessing import StandardScaler, MinMaxScaler, RobustScaler, PowerTransformer
 from sklearn.cluster import KMeans, DBSCAN, HDBSCAN, AgglomerativeClustering
@@ -31,6 +34,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+MAX_OPTIMIZE_TRIALS = 20
+MAX_OPTIMIZE_SUBSAMPLE = 2000
 
 UPLOAD_DIR = Path(__file__).parent.parent.parent / "data"
 TRASH_DIR = UPLOAD_DIR / "trash"
@@ -1762,4 +1770,642 @@ def get_silhouette_samples_api(generation_id: str):
         "average_score": round(avg_score, 4),
         "total_evaluated": len(X),
         "cluster_plots": cluster_plots
+    }
+
+class OptimizeRequest(BaseModel):
+    preset: str = "balanced"
+    target_playlist_count: int | None = None
+    free_cluster_count: bool = False
+
+
+def load_collection_features(generation_id: str):
+    generation_file = GENERATIONS_DIR / f"{generation_id}.json"
+    if not generation_file.exists():
+        raise HTTPException(status_code=404, detail="Generation not found.")
+    data = json.loads(generation_file.read_text())
+    feature_names = data.get("used_audio_features", [])
+
+    points, track_refs = [], []
+    for cluster in data.get("clusters", []):
+        for track in cluster.get("tracks", []):
+            raw = track.get("audio_features")
+            if not raw or not isinstance(raw, dict):
+                continue
+            vector = [raw.get(f) for f in feature_names]
+            if any(v is None for v in vector):
+                continue
+            points.append(vector)
+            track_refs.append(track)
+
+    return data, feature_names, points, track_refs
+
+
+GUARDRAIL_LEVELS = [
+    {"name": "strict", "max_noise_ratio": 0.15, "min_cluster_size": 4, "max_cluster_share": 0.5, "min_clusters": 3},
+    {"name": "moderate", "max_noise_ratio": 0.25, "min_cluster_size": 3, "max_cluster_share": 0.6, "min_clusters": 3},
+    {"name": "relaxed", "max_noise_ratio": 0.35, "min_cluster_size": 1, "max_cluster_share": 0.7, "min_clusters": 2},
+]
+
+
+def evaluate_pipeline(X, scaler_name, algorithm_name, params, track_refs=None, guardrails=None):
+    scalers = {
+        "standard": StandardScaler(),
+        "minmax": MinMaxScaler(),
+        "robust": RobustScaler(),
+    }
+    scaler = scalers[scaler_name]
+    X_scaled = scaler.fit_transform(X)
+
+    if algorithm_name == "kmeans":
+        model = KMeans(n_clusters=params["k"], n_init=10, random_state=42)
+        labels = model.fit_predict(X_scaled)
+    elif algorithm_name == "agglomerative":
+        model = AgglomerativeClustering(n_clusters=params["k"], linkage="ward")
+        labels = model.fit_predict(X_scaled)
+    elif algorithm_name == "dbscan":
+        model = DBSCAN(eps=params["eps"], min_samples=params["min_samples"])
+        labels = model.fit_predict(X_scaled)
+    else:
+        raise ValueError(f"Unknown algorithm: {algorithm_name}")
+
+    non_noise_mask = labels != -1
+    noise_count = int((~non_noise_mask).sum())
+    songs_total = len(labels)
+
+    if guardrails is None:
+        guardrails = GUARDRAIL_LEVELS[0]
+
+    if non_noise_mask.sum() < 3 or len(set(labels[non_noise_mask])) < guardrails["min_clusters"]:
+        return {"rejected_reason": "too_few_clusters"}
+
+    cluster_sizes = np.bincount(labels[non_noise_mask][labels[non_noise_mask] >= 0])
+    cluster_sizes = cluster_sizes[cluster_sizes > 0]
+    if len(cluster_sizes) < guardrails["min_clusters"]:
+        return {"rejected_reason": "too_few_clusters"}
+    if noise_count / songs_total > guardrails["max_noise_ratio"]:
+        return {"rejected_reason": "noise_too_high", "detail": f"Noise ratio is {noise_count / songs_total * 100:.0f}%, maximum is {guardrails['max_noise_ratio'] * 100:.0f}%."}
+
+    warnings = []
+    if cluster_sizes.min() < guardrails["min_cluster_size"]:
+        small_label_positions = [i for i, size in enumerate(cluster_sizes) if size < 4]
+        for label_pos in small_label_positions:
+            actual_label = sorted(set(labels[non_noise_mask]))[label_pos]
+            track_indices_in_full = [i for i in range(len(labels)) if labels[i] == actual_label]
+            warnings.append({
+                "type": "CLUSTER_TOO_SMALL",
+                "cluster_size": int(cluster_sizes[label_pos]),
+                "track_indices": track_indices_in_full,
+            })
+    if cluster_sizes.max() / songs_total > guardrails["max_cluster_share"]:
+        warnings.append({
+            "type": "CLUSTER_TOO_DOMINANT",
+            "cluster_size": int(cluster_sizes.max()),
+            "percentage": round(cluster_sizes.max() / songs_total * 100, 1),
+        })
+
+    X_valid = X_scaled[non_noise_mask]
+    labels_valid = labels[non_noise_mask]
+
+    silhouette = silhouette_score(X_valid, labels_valid)
+    calinski = calinski_harabasz_score(X_valid, labels_valid)
+    davies = davies_bouldin_score(X_valid, labels_valid)
+
+    balance_mean = cluster_sizes.mean()
+    balance_std = cluster_sizes.std()
+    cluster_balance = max(0.0, 1.0 - (balance_std / balance_mean if balance_mean > 0 else 0))
+
+    return {
+        "labels": labels,
+        "scaler": scaler_name,
+        "algorithm": algorithm_name,
+        "params": params,
+        "warnings": warnings,
+        "metrics": {
+            "silhouette_score": silhouette,
+            "calinski_harabasz_index": calinski,
+            "davies_bouldin_index": davies,
+            "cluster_balance": cluster_balance,
+            "noise_ratio": noise_count / songs_total,
+        },
+    }
+
+
+def composite_score(metrics, preset):
+    db_norm = 1.0 / (1.0 + metrics["davies_bouldin_index"])
+    silhouette_norm = (metrics["silhouette_score"] + 1) / 2
+
+    if preset == "genre_discovery":
+        weights = {"silhouette": 0.4, "db": 0.3, "balance": 0.3}
+    elif preset == "dj_flow":
+        weights = {"silhouette": 0.2, "db": 0.2, "balance": 0.6}
+    else:
+        weights = {"silhouette": 0.34, "db": 0.33, "balance": 0.33}
+
+    return (
+        weights["silhouette"] * silhouette_norm
+        + weights["db"] * db_norm
+        + weights["balance"] * metrics["cluster_balance"]
+    )
+
+
+wizard_executor = ThreadPoolExecutor(max_workers=1)
+wizard_jobs: dict = {}
+wizard_jobs_lock = threading.Lock()
+wizard_active_job_id: str | None = None
+
+
+class WizardJob:
+    def __init__(self, job_id: str):
+        self.job_id = job_id
+        self.status = "queued"
+        self.trial = 0
+        self.total_trials = MAX_OPTIMIZE_TRIALS
+        self.best_score = None
+        self.candidates = []
+        self.error = None
+        self.cancel_requested = False
+        self.guardrail_stage = 1
+        self.guardrail_stage_count = len(GUARDRAIL_LEVELS)
+        self.guardrail_level_name = GUARDRAIL_LEVELS[0]["name"]
+        self.guardrails_used = None
+        self.guardrails_relaxed = False
+
+    def to_dict(self):
+        return {
+            "job_id": self.job_id,
+            "status": self.status,
+            "trial": self.trial,
+            "total_trials": self.total_trials,
+            "best_score": self.best_score,
+            "candidates": self.candidates,
+            "error": self.error,
+            "guardrail_stage": self.guardrail_stage,
+            "guardrail_stage_count": self.guardrail_stage_count,
+            "guardrail_level_name": self.guardrail_level_name,
+            "guardrails_used": self.guardrails_used,
+            "guardrails_relaxed": self.guardrails_relaxed,
+        }
+
+
+def run_optimization_job(job: "WizardJob", generation_id: str, request: "OptimizeRequest"):
+    try:
+        job.status = "running"
+        data, feature_names, points, track_refs = load_collection_features(generation_id)
+
+        if len(points) < 10:
+            job.status = "failed"
+            job.error = "Not enough valid tracks with audio features to optimize."
+            return
+
+        X = np.array(points)
+
+        if len(X) > MAX_OPTIMIZE_SUBSAMPLE:
+            rng = np.random.default_rng(42)
+            idx = rng.choice(len(X), size=MAX_OPTIMIZE_SUBSAMPLE, replace=False)
+            X_search = X[idx]
+            track_refs_search = [track_refs[i] for i in idx]
+        else:
+            X_search = X
+            track_refs_search = track_refs
+
+        n_search = len(X_search)
+        n_full = len(X)
+
+        use_target = request.target_playlist_count is not None and not request.free_cluster_count
+
+        if use_target:
+            target = request.target_playlist_count
+            max_possible_k_full = min(200, n_full // 4)
+
+            if max_possible_k_full < 3:
+                job.status = "failed"
+                job.error = "This collection is too small to target a specific playlist count."
+                return
+            if target < 3 or target > max_possible_k_full:
+                job.status = "failed"
+                job.error = f"Target playlist count must be between 3 and {max_possible_k_full} for this collection."
+                return
+
+            k_low = max(3, target - 3)
+            k_high = min(max_possible_k_full, target + 3)
+            max_k_for_search = n_search // 4
+            k_high = min(k_high, max_k_for_search)
+
+            if k_low > k_high:
+                job.status = "failed"
+                job.error = "The target playlist count is valid for the full collection, but the search sample is too small. Increase the search sample size or choose a smaller target."
+                return
+        else:
+            k_max = min(50, n_search // 5)
+            if k_max < 3:
+                job.status = "failed"
+                job.error = "Collection or search sample too small for clustering."
+                return
+            k_low = 3
+            k_high = k_max
+
+        results = []
+        rejection_reasons = []
+        used_guardrail_level = None
+
+        for stage_index, guardrail_level in enumerate(GUARDRAIL_LEVELS):
+            if job.cancel_requested:
+                job.status = "cancelled"
+                return
+
+            job.guardrail_stage = stage_index + 1
+            job.guardrail_level_name = guardrail_level["name"]
+            job.trial = 0
+            stage_results = []
+            stage_rejections = []
+
+            def objective(trial):
+                if job.cancel_requested:
+                    raise optuna.TrialPruned()
+
+                scaler_name = trial.suggest_categorical("scaler", ["standard", "minmax", "robust"])
+                algorithm_name = trial.suggest_categorical("algorithm", ["kmeans", "agglomerative", "dbscan"])
+
+                if algorithm_name in ("kmeans", "agglomerative"):
+                    k = trial.suggest_int("k", k_low, k_high)
+                    params = {"k": k}
+                else:
+                    eps = trial.suggest_float("eps", 0.1, 2.0)
+                    min_samples = trial.suggest_int("min_samples", 3, 15)
+                    params = {"eps": eps, "min_samples": min_samples}
+
+                result = evaluate_pipeline(X_search, scaler_name, algorithm_name, params, track_refs_search, guardrail_level)
+
+                job.trial += 1
+                if "rejected_reason" in result:
+                    stage_rejections.append(result)
+                    raise optuna.TrialPruned()
+
+                stage_results.append(result)
+                score = composite_score(result["metrics"], request.preset)
+                if job.best_score is None or score > job.best_score:
+                    job.best_score = round(score, 4)
+                return score
+
+            study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler(seed=42))
+            study.optimize(objective, n_trials=MAX_OPTIMIZE_TRIALS, show_progress_bar=False)
+
+            if job.cancel_requested:
+                job.status = "cancelled"
+                return
+
+            if stage_results:
+                results = stage_results
+                rejection_reasons = stage_rejections
+                used_guardrail_level = guardrail_level
+                break
+            else:
+                rejection_reasons = stage_rejections
+
+        if not results:
+            reason_counts = {}
+            for r in rejection_reasons:
+                key = r["rejected_reason"]
+                reason_counts[key] = reason_counts.get(key, 0) + 1
+
+            if reason_counts:
+                most_common_reason = max(reason_counts, key=reason_counts.get)
+                example_detail = next((r.get("detail") for r in rejection_reasons if r["rejected_reason"] == most_common_reason and "detail" in r), None)
+                reason_labels = {
+                    "too_few_clusters": "Not enough songs to form at least 3 valid clusters.",
+                    "cluster_too_small": "Resulting clusters were too small (minimum 4 songs per playlist required).",
+                    "cluster_too_dominant": "One cluster would have contained more than 50% of all songs.",
+                    "noise_too_high": "Too many songs were classified as noise (maximum 15%).",
+                }
+                message = reason_labels.get(most_common_reason, most_common_reason)
+                if example_detail:
+                    message += f" ({example_detail})"
+                job.status = "completed"
+                job.candidates = []
+                job.error = message
+                return
+
+            job.status = "completed"
+            job.candidates = []
+            job.error = "No pipeline configuration produced a usable result for this collection."
+            return
+
+        results.sort(key=lambda r: composite_score(r["metrics"], request.preset), reverse=True)
+
+        seen_algorithms = set()
+        top_candidates = []
+        for r in results:
+            key = (r["algorithm"], r["scaler"])
+            if key in seen_algorithms:
+                continue
+            seen_algorithms.add(key)
+            top_candidates.append(r)
+            if len(top_candidates) >= 3:
+                break
+
+        response_candidates = []
+        for i, r in enumerate(top_candidates):
+            resolved_warnings = []
+            for w in r.get("warnings", []):
+                resolved_warning = dict(w)
+                if "track_indices" in w:
+                    resolved_warning["tracks"] = [
+                        {
+                            "name": track_refs_search[idx].get("name"),
+                            "artist": track_refs_search[idx].get("artist"),
+                            "track_id": track_refs_search[idx].get("track_id"),
+                        }
+                        for idx in w["track_indices"]
+                    ]
+                    del resolved_warning["track_indices"]
+                resolved_warnings.append(resolved_warning)
+
+            response_candidates.append({
+                "id": str(i),
+                "name": f"{r['scaler'].capitalize()}Scaler + {r['algorithm'].capitalize()} ({', '.join(f'{k}={v}' for k, v in r['params'].items())})",
+                "algorithm": r["algorithm"],
+                "scaler": r["scaler"],
+                "params": r["params"],
+                "overall_score": round(composite_score(r["metrics"], request.preset), 4),
+                "metrics": {k: round(v, 4) for k, v in r["metrics"].items()},
+                "warnings": resolved_warnings,
+                "requires_confirmation": len(resolved_warnings) > 0,
+                "guardrail_level_name": used_guardrail_level["name"],
+            })
+
+        job.candidates = response_candidates
+        job.guardrails_used = used_guardrail_level
+        job.guardrails_relaxed = used_guardrail_level["name"] != GUARDRAIL_LEVELS[0]["name"] if used_guardrail_level else False
+        job.status = "completed"
+
+    except Exception as e:
+        job.status = "failed"
+        job.error = str(e)
+    finally:
+        global wizard_active_job_id
+        with wizard_jobs_lock:
+            wizard_active_job_id = None
+
+
+@app.post("/generations/{generation_id}/optimize", status_code=202)
+async def optimize_generation(generation_id: str, request: OptimizeRequest):
+    global wizard_active_job_id
+    with wizard_jobs_lock:
+        if wizard_active_job_id is not None:
+            raise HTTPException(status_code=409, detail="An optimization is already running. Please wait for it to finish or cancel it.")
+        job_id = str(uuid.uuid4())
+        job = WizardJob(job_id)
+        wizard_jobs[job_id] = job
+        wizard_active_job_id = job_id
+
+    wizard_executor.submit(run_optimization_job, job, generation_id, request)
+    return {"job_id": job_id, "status": "queued"}
+
+
+@app.get("/wizard/jobs/{job_id}")
+async def get_wizard_job(job_id: str):
+    with wizard_jobs_lock:
+        job = wizard_jobs.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job not found.")
+        return job.to_dict()
+
+
+@app.post("/wizard/jobs/{job_id}/cancel")
+async def cancel_wizard_job(job_id: str):
+    with wizard_jobs_lock:
+        job = wizard_jobs.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job not found.")
+        job.cancel_requested = True
+        return {"status": "cancellation_requested"}
+
+
+class CreateOptimizedRequest(BaseModel):
+    preset: str
+    scaler: str
+    algorithm: str
+    params: dict
+    allow_guardrail_violations: bool = False
+    guardrail_level_name: str = "strict"
+
+
+def compute_scaled_features(track_features: dict, feature_names: list, scaler):
+    vector = [track_features.get(f) for f in feature_names]
+    scaled_vector = scaler.transform([vector])[0]
+    return {f: float(v) for f, v in zip(feature_names, scaled_vector)}
+
+
+@app.post("/generations/{generation_id}/optimize/create")
+async def create_optimized_generation(generation_id: str, request: CreateOptimizedRequest):
+    source_file = GENERATIONS_DIR / f"{generation_id}.json"
+    if not source_file.exists():
+        raise HTTPException(status_code=404, detail="Source generation not found.")
+    source_data = json.loads(source_file.read_text())
+
+    metrics_before = compute_generation_quality(generation_id)
+
+    data, feature_names, points, track_refs = load_collection_features(generation_id)
+    if len(points) < 10:
+        raise HTTPException(status_code=400, detail="Not enough valid tracks to create optimized collection.")
+
+    X = np.array(points)
+    guardrail_level = next((g for g in GUARDRAIL_LEVELS if g["name"] == request.guardrail_level_name), GUARDRAIL_LEVELS[0])
+    result = evaluate_pipeline(X, request.scaler, request.algorithm, request.params, track_refs, guardrail_level)
+    if "rejected_reason" in result:
+        raise HTTPException(status_code=400, detail=f"This pipeline configuration is no longer valid on the full collection: {result.get('detail', result['rejected_reason'])}")
+
+    resolved_warnings = []
+    for w in result.get("warnings", []):
+        resolved_warning = dict(w)
+        if "track_indices" in w:
+            resolved_warning["tracks"] = [
+                {
+                    "name": track_refs[idx].get("name"),
+                    "artist": track_refs[idx].get("artist"),
+                    "track_id": track_refs[idx].get("track_id"),
+                }
+                for idx in w["track_indices"]
+            ]
+            del resolved_warning["track_indices"]
+        resolved_warnings.append(resolved_warning)
+
+    if resolved_warnings and not request.allow_guardrail_violations:
+        raise HTTPException(status_code=409, detail={"message": "This pipeline has guardrail warnings that require confirmation.", "warnings": resolved_warnings})
+
+    accepted_warnings = resolved_warnings
+
+    labels = np.asarray(result["labels"])
+
+    scalers = {"standard": StandardScaler(), "minmax": MinMaxScaler(), "robust": RobustScaler()}
+    fitted_scaler = scalers[request.scaler]
+    fitted_scaler.fit(X)
+
+    unique_labels = sorted(set(l for l in labels if l != -1))
+    new_clusters = []
+    for cluster_id, label in enumerate(unique_labels):
+        cluster_tracks = []
+        for i, track in enumerate(track_refs):
+            if labels[i] != label:
+                continue
+            new_track = dict(track)
+            new_track["audio_features_scaled"] = compute_scaled_features(
+                track["audio_features"], feature_names, fitted_scaler
+            )
+            cluster_tracks.append(new_track)
+
+        total_duration = sum(t.get("duration_ms") or 0 for t in cluster_tracks)
+
+        audio_feature_averages = {}
+        audio_feature_averages_scaled = {}
+        for f in feature_names:
+            raw_values = [t["audio_features"].get(f) for t in cluster_tracks if t["audio_features"].get(f) is not None]
+            scaled_values = [t["audio_features_scaled"].get(f) for t in cluster_tracks if t["audio_features_scaled"].get(f) is not None]
+            audio_feature_averages[f] = round(sum(raw_values) / len(raw_values), 4) if raw_values else None
+            audio_feature_averages_scaled[f] = round(sum(scaled_values) / len(scaled_values), 4) if scaled_values else None
+
+        new_clusters.append({
+            "cluster_id": cluster_id,
+            "playlist_id": str(uuid.uuid4()),
+            "custom_name": None,
+            "song_count": len(cluster_tracks),
+            "duration_ms": total_duration,
+            "audio_feature_averages": audio_feature_averages,
+            "audio_feature_averages_scaled": audio_feature_averages_scaled,
+            "tracks": cluster_tracks,
+        })
+
+    noise_count = int((labels == -1).sum())
+    clustered_song_count = sum(len(c["tracks"]) for c in new_clusters)
+    new_id = str(uuid.uuid4())
+
+    new_generation = {
+        "id": new_id,
+        "name": f"{source_data['name']} — Optimized",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "source_filename": source_data.get("source_filename"),
+        "songs_total": clustered_song_count,
+        "playlist_count": len(new_clusters),
+        "silhouette": result["metrics"]["silhouette_score"],
+        "clusters": new_clusters,
+        "algorithm": request.algorithm,
+        "scaler": request.scaler,
+        "used_audio_features": feature_names,
+        "noise_count": noise_count,
+        "dimensionality_reduction": None,
+        "expert": None,
+        "source_generation_id": generation_id,
+        "optimization_parent": generation_id,
+        "optimization_status": "completed",
+        "wizard_metadata": {
+            "preset_used": request.preset,
+            "pipeline_applied": {"scaler": request.scaler, "algorithm": request.algorithm, "params": request.params},
+            "metrics_before": metrics_before,
+            "metrics_after": result["metrics"],
+            "input_song_count": len(points),
+            "clustered_song_count": clustered_song_count,
+            "excluded_noise_count": noise_count,
+            "accepted_warnings": accepted_warnings,
+        },
+    }
+
+    tmp_file = GENERATIONS_DIR / f"{new_id}.json.tmp"
+    final_file = GENERATIONS_DIR / f"{new_id}.json"
+    tmp_file.write_text(json.dumps(new_generation))
+    tmp_file.rename(final_file)
+
+    return {"status": "created", "generation_id": new_id, "name": new_generation["name"]}
+
+@app.get("/generations/{generation_id}/liner-notes")
+async def get_liner_notes(generation_id: str):
+    generation_file = GENERATIONS_DIR / f"{generation_id}.json"
+    if not generation_file.exists():
+        raise HTTPException(status_code=404, detail="Generation not found.")
+    data = json.loads(generation_file.read_text())
+
+    wizard_metadata = data.get("wizard_metadata")
+    if not wizard_metadata:
+        raise HTTPException(status_code=404, detail="This collection was not created by the Pinball Wizard.")
+
+    pipeline = wizard_metadata.get("pipeline_applied", {})
+    metrics_before = wizard_metadata.get("metrics_before", {}).get("metrics", {})
+    metrics_after = wizard_metadata.get("metrics_after", {})
+
+    def metric_row(label, before_key, after_key, unit=""):
+        before = metrics_before.get(before_key, {}).get("value")
+        after = metrics_after.get(after_key)
+        before_str = f"{round(before, 4)}{unit}" if before is not None else "N/A"
+        after_str = f"{round(after, 4)}{unit}" if after is not None else "N/A"
+        return {"label": label, "before": before_str, "after": after_str}
+
+    warning_section = None
+    if wizard_metadata.get("accepted_warnings"):
+        warning_rows = []
+        for w in wizard_metadata["accepted_warnings"]:
+            if w.get("type") == "CLUSTER_TOO_SMALL":
+                songs = ", ".join(f"{t['name']} by {t['artist']}" for t in w.get("tracks", []))
+                warning_rows.append({"label": f"Small cluster ({w.get('cluster_size')} songs)", "value": songs})
+            elif w.get("type") == "CLUSTER_TOO_DOMINANT":
+                warning_rows.append({"label": "Dominant cluster", "value": f"{w.get('percentage')}% of collection"})
+        warning_section = {"title": "Accepted Warnings", "rows": warning_rows}
+
+    sections = [
+        {
+            "title": "Source",
+            "rows": [
+                {"label": "Original Collection", "value": data.get("source_generation_id")},
+                {"label": "Preset Used", "value": wizard_metadata.get("preset_used")},
+                {"label": "Created", "value": data.get("created_at")},
+            ],
+        },
+        {
+            "title": "Pipeline",
+            "rows": [
+                {"label": "Scaler", "value": pipeline.get("scaler")},
+                {"label": "Algorithm", "value": pipeline.get("algorithm")},
+                {"label": "Parameters", "value": ", ".join(f"{k}={v}" for k, v in pipeline.get("params", {}).items())},
+            ],
+        },
+        {
+            "title": "Collection Size",
+            "rows": [
+                {"label": "Input Songs", "value": wizard_metadata.get("input_song_count")},
+                {"label": "Clustered Songs", "value": wizard_metadata.get("clustered_song_count")},
+                {"label": "Excluded as Noise", "value": wizard_metadata.get("excluded_noise_count")},
+            ],
+        },
+    ] + ([{
+        "title": "Accepted Warnings",
+        "rows": [
+            {
+                "label": w.get("type", "Warning"),
+                "value": (
+                    f"{w.get('cluster_size')} songs: " + ", ".join(f"{t['name']} by {t['artist']}" for t in w.get("tracks", []))
+                    if w.get("type") == "CLUSTER_TOO_SMALL"
+                    else f"{w.get('percentage')}% of collection" if w.get("type") == "CLUSTER_TOO_DOMINANT"
+                    else str(w)
+                ),
+            }
+            for w in wizard_metadata.get("accepted_warnings", [])
+        ],
+    }] if wizard_metadata.get("accepted_warnings") else []) + [
+        {
+            "title": "Before / After Comparison",
+            "comparison_rows": [
+                metric_row("Silhouette Score", "silhouette_score", "silhouette_score"),
+                metric_row("Calinski-Harabasz Index", "calinski_harabasz_index", "calinski_harabasz_index"),
+                metric_row("Davies-Bouldin Index", "davies_bouldin_index", "davies_bouldin_index"),
+                metric_row("Cluster Balance", "cluster_balance", "cluster_balance"),
+                metric_row("Noise Ratio", "noise_ratio", "noise_ratio"),
+            ],
+        },
+    ]
+
+    if warning_section:
+        sections.append(warning_section)
+
+    return {
+        "generation_id": generation_id,
+        "name": data.get("name"),
+        "sections": sections,
     }

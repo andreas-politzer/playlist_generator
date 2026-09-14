@@ -10,7 +10,7 @@ export type ChartSource =
   | { type: 'playlist'; generationId: string; playlistId: string }
   | { type: 'generation'; generationId: string }
 
-export type TileKind = 'chart' | 'playlist-detail' | 'quality-result' | 'silhouette-plot'
+export type TileKind = 'chart' | 'playlist-detail' | 'quality-result' | 'silhouette-plot' | 'liner-notes'
 
 export interface ChartConfig {
   mode?: 'raw' | 'scaled'
